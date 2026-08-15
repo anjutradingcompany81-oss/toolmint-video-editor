@@ -63,3 +63,7 @@ services:
       mc mb -p local/toolmint-media &&
       mc anonymous set download local/toolmint-media/public
       "
+    # Note: uploads go through the API (multipart -> server -> S3 PutObject),
+    # not a direct browser-to-bucket presigned PUT, so bucket CORS isn't
+    # needed for local dev. This MinIO image's CORS support is also broken
+    # ("functionality that is not implemented") as of the version pulled here.

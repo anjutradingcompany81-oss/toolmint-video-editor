@@ -4,11 +4,10 @@ A browser-based, scene-first video editor: multi-track timeline, non-destructive
 editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
 **Status: Phase 1 (Foundation) in progress.** Done so far: monorepo scaffold,
-database schema, and email/password auth (register, login, refresh rotation,
-email verification, password reset). Not yet built: the project dashboard,
-media upload, or the editor itself. See the product/systems spec for the full
-plan (PRD, architecture, DB schema, timeline JSON format, rendering pipeline,
-cost/risk, phased plan).
+database schema, email/password auth, and project CRUD + media upload. Not yet
+built: the dashboard UI (in progress) or the editor itself. See the
+product/systems spec for the full plan (PRD, architecture, DB schema, timeline
+JSON format, rendering pipeline, cost/risk, phased plan).
 
 ## Stack
 
@@ -118,6 +117,38 @@ Notes:
 - `register`, `login`, `forgot-password`, and `resend-verification` are rate
   limited per IP (in-memory — fine for one API instance; move to a
   Redis-backed limiter before running more than one).
+
+## Projects & media
+
+All endpoints below require `Authorization: Bearer <accessToken>`.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /projects` | Create a project (+ its initial empty composition) in the caller's workspace |
+| `GET /projects?includeArchived=&search=` | List the caller's projects, newest-updated first |
+| `GET /projects/:id` | Get one project (404, not 403, if the caller isn't a member) |
+| `PATCH /projects/:id` | Rename and/or archive/unarchive |
+| `POST /projects/:id/duplicate` | Clone a project, including its latest composition |
+| `DELETE /projects/:id` | Delete a project and its media objects |
+| `POST /projects/:id/media` | Upload a file (`multipart/form-data`, field `file`) |
+| `GET /projects/:id/media` | List a project's media, each with a 10-minute signed preview URL |
+| `DELETE /projects/:id/media/:mediaAssetId` | Delete one media asset |
+
+Notes:
+- Workspace roles gate write access: `VIEWER`/`REVIEWER` can read but not
+  rename, archive, delete, or upload; `OWNER`/`EDITOR` can do both. Every user
+  is `OWNER` of their own workspace today — role differences matter once team
+  workspaces (Phase 4) exist.
+- Uploads are proxied through the API (multipart in, `PutObject` out) rather
+  than a direct browser-to-bucket presigned PUT. That's simpler and sidesteps
+  bucket CORS entirely, at the cost of routing file bytes through the Node
+  process — fine at MVP scale, worth revisiting (direct presigned uploads,
+  chunked/resumable) before large files or high volume matter.
+- Per-kind mime-type allowlist and size caps live in
+  `apps/api/src/media/media.constants.ts` (video 500MB, image 25MB, audio
+  100MB, PDF 20MB) — placeholders until plan-based limits exist.
+- No malware scanning yet (Phase 4/5 concern per the spec) — only type/size
+  validation today.
 
 ## Environment variables
 

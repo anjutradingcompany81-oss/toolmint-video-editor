@@ -13,6 +13,8 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "latest",
+    "@aws-sdk/s3-request-presigner": "latest",
     "@nestjs/common": "latest",
     "@nestjs/config": "latest",
     "@nestjs/core": "latest",
@@ -24,6 +26,7 @@
     "class-transformer": "latest",
     "class-validator": "latest",
     "cookie-parser": "latest",
+    "multer": "latest",
     "passport": "latest",
     "passport-jwt": "latest",
     "reflect-metadata": "latest",
@@ -36,6 +39,7 @@
     "@types/cookie-parser": "latest",
     "@types/express": "latest",
     "@types/jest": "latest",
+    "@types/multer": "latest",
     "@types/node": "latest",
     "@types/passport-jwt": "latest",
     "@typescript-eslint/eslint-plugin": "latest",
