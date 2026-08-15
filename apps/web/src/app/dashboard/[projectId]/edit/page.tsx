@@ -1,91 +1,20 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use } from "react";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/use-require-auth";
-import { ApiError } from "@/lib/api-client";
-import { getProject, type Project } from "@/lib/projects-api";
-import { getComposition, saveComposition, newScene, type Composition, type Scene } from "@/lib/composition-api";
+import { useCompositionEditor } from "@/lib/use-composition-editor";
+import { newScene } from "@/lib/composition-api";
+import SaveIndicator from "@/components/save-indicator";
 import SceneCard from "./scene-card";
-
-type SaveStatus = "unsaved" | "saving" | "saved" | "error";
-
-const SAVE_DEBOUNCE_MS = 1500;
 
 export default function EditorPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = use(params);
   const { status } = useRequireAuth();
-
-  const [project, setProject] = useState<Project | null>(null);
-  const [composition, setComposition] = useState<Composition | null>(null);
-  const [scenes, setScenes] = useState<Scene[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (status !== "authenticated") return;
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      try {
-        const [proj, env] = await Promise.all([getProject(projectId), getComposition(projectId)]);
-        if (cancelled) return;
-        setProject(proj);
-        setComposition(env.composition);
-        setScenes(env.composition.scenes);
-      } catch (err) {
-        if (!cancelled) setLoadError(err instanceof ApiError ? err.message : "Couldn't load the editor.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [status, projectId]);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, []);
-
-  // All scene edits flow through here: update local state, mark unsaved, and
-  // (re)schedule the debounced save — no effect watches `scenes` to do this,
-  // since setState synchronously at the top of an effect body is the exact
-  // footgun that caused the auth refresh race earlier in this project.
-  function updateScenes(nextScenes: Scene[], baseComposition: Composition) {
-    setScenes(nextScenes);
-    setSaveStatus("unsaved");
-
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaveStatus("saving");
-      setSaveError(null);
-      try {
-        const payload: Composition = { ...baseComposition, scenes: nextScenes, updatedAt: new Date().toISOString() };
-        const env = await saveComposition(projectId, payload);
-        setComposition(env.composition);
-        setSaveStatus("saved");
-      } catch (err) {
-        setSaveStatus("error");
-        setSaveError(err instanceof ApiError ? err.message : "Couldn't save changes.");
-      }
-    }, SAVE_DEBOUNCE_MS);
-  }
-
-  function withScenes(mutate: (prev: Scene[]) => Scene[]) {
-    if (!composition) return;
-    updateScenes(mutate(scenes), composition);
-  }
+  const { project, composition, scenes, loading, loadError, saveStatus, saveError, withScenes } = useCompositionEditor(
+    projectId,
+    status === "authenticated",
+  );
 
   function addScene() {
     withScenes((prev) => [...prev, newScene(prev.length)]);
@@ -148,17 +77,24 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
 
       <div className="mt-6 flex flex-col gap-3">
         {scenes.map((scene, index) => (
-          <SceneCard
-            key={scene.id}
-            scene={scene}
-            index={index}
-            count={scenes.length}
-            onRename={(name) => renameScene(scene.id, name)}
-            onDurationChange={(ms) => setDuration(scene.id, ms)}
-            onMoveUp={() => moveScene(index, -1)}
-            onMoveDown={() => moveScene(index, 1)}
-            onDelete={() => deleteScene(scene.id)}
-          />
+          <div key={scene.id} className="flex flex-col gap-2">
+            <SceneCard
+              scene={scene}
+              index={index}
+              count={scenes.length}
+              onRename={(name) => renameScene(scene.id, name)}
+              onDurationChange={(ms) => setDuration(scene.id, ms)}
+              onMoveUp={() => moveScene(index, -1)}
+              onMoveDown={() => moveScene(index, 1)}
+              onDelete={() => deleteScene(scene.id)}
+            />
+            <Link
+              href={`/dashboard/${projectId}/edit/${scene.id}`}
+              className="self-end text-xs text-[var(--tm-accent)] underline underline-offset-2"
+            >
+              Open timeline →
+            </Link>
+          </div>
         ))}
       </div>
 
@@ -172,17 +108,6 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
       >
         + Add scene
       </button>
-
-      <p className="mt-8 text-xs text-[var(--tm-text-dim)]">
-        The multi-track timeline (clips, transitions, voice-over) is the next editor module.
-      </p>
     </main>
   );
-}
-
-function SaveIndicator({ status, error }: { status: SaveStatus; error: string | null }) {
-  if (status === "saving") return <span className="text-xs text-[var(--tm-text-dim)]">Saving…</span>;
-  if (status === "saved") return <span className="text-xs text-[var(--tm-accent)]">Saved</span>;
-  if (status === "error") return <span className="text-xs text-red-400" title={error ?? undefined}>Couldn&apos;t save</span>;
-  return <span className="text-xs text-[var(--tm-text-dim)]">Unsaved changes</span>;
 }

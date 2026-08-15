@@ -92,5 +92,86 @@ describe("CompositionService", () => {
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it("accepts a track with a placed clip and fills in defaults for omitted fields", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "video",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "clip", mediaAssetId: "med_1", startMs: 0, durationMs: 3000 }],
+              },
+            ],
+          },
+        ],
+      };
+      prisma.projectVersion.create.mockResolvedValue({ id: "ver_3", composition, createdAt: new Date() });
+
+      await service.save("user_1", "proj_1", composition);
+
+      const savedComposition = prisma.projectVersion.create.mock.calls[0][0].data.composition;
+      const savedItem = savedComposition.scenes[0].tracks[0].items[0];
+      expect(savedItem).toMatchObject({
+        trimInMs: 0,
+        trimOutMs: 0,
+        transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
+      });
+    });
+
+    it("rejects a clip with a non-positive duration", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "video",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "clip", mediaAssetId: "med_1", startMs: 0, durationMs: 0 }],
+              },
+            ],
+          },
+        ],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("rejects an item missing its mediaAssetId", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "video",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "clip", startMs: 0, durationMs: 3000 }],
+              },
+            ],
+          },
+        ],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });

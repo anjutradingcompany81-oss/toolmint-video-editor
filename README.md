@@ -5,10 +5,11 @@ editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
 **Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
 Auth, project CRUD, media upload, and the dashboard are done. The storyboard
-editor (add/rename/reorder/delete scenes, autosave) is done. Not yet built:
-the multi-track timeline, trim/split/crop, transitions, preview, or FFmpeg
-rendering. See the product/systems spec for the full plan (PRD, architecture,
-DB schema, timeline JSON format, rendering pipeline, cost/risk, phased plan).
+editor and a first pass at the multi-track timeline (place/move/trim/split/
+delete clips on video and audio tracks) are done. Not yet built: text
+overlays, transitions, real-time preview/playback, or FFmpeg rendering. See
+the product/systems spec for the full plan (PRD, architecture, DB schema,
+timeline JSON format, rendering pipeline, cost/risk, phased plan).
 
 ## Stack
 
@@ -168,13 +169,47 @@ reasonable number of rows; if that changes, a scheduled job to prune/squash
 old autosave versions is the fix — not switching to in-place mutation.
 
 `/dashboard/[projectId]/edit` is the storyboard editor: add/rename/reorder
-(move up/down)/delete scenes, per-scene duration. Every edit debounces a
-save and shows its status (`Unsaved changes` → `Saving…` → `Saved`, or an
-error). Verified end to end against live Postgres: added/reordered/renamed/
-resized scenes, reloaded the page and confirmed the exact state came back,
-and inspected the saved JSON directly in Postgres to confirm it matches.
-The multi-track timeline (clips on tracks, trim/split, transitions) is the
-next module — scenes already carry a `tracks` array for it to fill in.
+(move up/down)/delete scenes, per-scene duration.
+
+`/dashboard/[projectId]/edit/[sceneId]` is the timeline editor for one
+scene: add video/audio tracks (lock/mute/remove), select a media asset and
+click a track to append it there, select a placed clip to edit its start/
+duration as precise numbers, split it at the playhead (click the ruler to
+move the playhead), and delete (confirmed — no undo system yet). A track
+only accepts compatible media (video tracks take video/image, audio tracks
+take audio), enforced both as a disabled/labeled affordance in the UI and
+by the Zod schema server-side.
+
+Both editors debounce saves and show status (`Unsaved changes` → `Saving…`
+→ `Saved`, or an error), sharing one hook (`use-composition-editor.ts`) so
+neither duplicates the load/autosave logic.
+
+**Why click-to-place instead of drag-and-drop, and number fields instead of
+drag-to-trim:** this codebase already prefers explicit controls over drag
+gestures (scene reordering uses move-up/down buttons, not drag) — for the
+same reason it does here: precise, keyboard/screen-reader friendly, and
+reliably testable, versus a native HTML5 drag-and-drop or freeform
+pointer-drag interaction that's fragile to automate and awkward on touch.
+Real drag-and-drop placement and drag-to-trim handles are UX polish that
+can be layered on top of the same data model later without a rework.
+
+**What's deliberately out of scope for this pass:** text overlays and
+transitions (only `clip`/`audio` item types exist so far — the schema's
+`type` field is ready to extend), real playback/preview (items reference
+`mediaAssetId` but nothing renders video/canvas yet), and real source
+duration — `MediaAsset.durationMs` is never populated (no ffprobe
+integration yet), so new clips get a placeholder duration (3s for images,
+5s for video/audio) with no validation that trims stay within the actual
+source length. That validation arrives with the render pipeline.
+
+Verified end to end against live Postgres, including the actual JSON
+payload after each operation: added/reordered/renamed/resized scenes;
+placed two video clips and one that a locked/wrong-kind track correctly
+refused; split a clip at the playhead and confirmed the two halves'
+`trimInMs`/`trimOutMs` are exactly complementary; moved a clip via its
+start-time field; deleted a clip (and confirmed the confirm-guard actually
+blocks an unconfirmed delete); reloaded the page after every step and got
+back the exact same state each time.
 
 ## Frontend
 
