@@ -3,11 +3,12 @@
 A browser-based, scene-first video editor: multi-track timeline, non-destructive
 editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
-**Status: Phase 1 (Foundation) complete.** Monorepo scaffold, database schema,
-email/password auth, project CRUD, media upload, and the dashboard UI are all
-in and working end to end. Not yet built: the editor itself (Phase 2). See the
-product/systems spec for the full plan (PRD, architecture, DB schema, timeline
-JSON format, rendering pipeline, cost/risk, phased plan).
+**Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
+Auth, project CRUD, media upload, and the dashboard are done. The storyboard
+editor (add/rename/reorder/delete scenes, autosave) is done. Not yet built:
+the multi-track timeline, trim/split/crop, transitions, preview, or FFmpeg
+rendering. See the product/systems spec for the full plan (PRD, architecture,
+DB schema, timeline JSON format, rendering pipeline, cost/risk, phased plan).
 
 ## Stack
 
@@ -83,7 +84,8 @@ reset, email verification). `Scene` / `Track` / `TimelineItem` / `VoiceOver` /
 built, not before — see the DB schema section of the spec for the full model.
 
 The timeline itself is never stored as separate rows per clip — it's a single
-validated JSON document on `ProjectVersion.composition`. See the spec's
+validated JSON document on `ProjectVersion.composition`, checked against the
+Zod schema in `apps/api/src/projects/composition.schema.ts`. See the spec's
 "Timeline JSON specification" for the format.
 
 ## Auth
@@ -149,6 +151,30 @@ Notes:
   100MB, PDF 20MB) — placeholders until plan-based limits exist.
 - No malware scanning yet (Phase 4/5 concern per the spec) — only type/size
   validation today.
+
+## Composition & editor
+
+| Endpoint | What it does |
+|---|---|
+| `GET /projects/:id/composition` | The latest saved composition (scenes, tracks, etc.) |
+| `POST /projects/:id/composition` | Validate and save — creates a **new** `ProjectVersion` row, doesn't mutate one in place |
+
+Autosave creates a new version per save rather than updating one in place.
+That matches the spec (composition JSON lives on an immutable
+`ProjectVersion` snapshot) and makes "restore an earlier version" (Phase 4)
+a read over rows that already exist instead of a schema change later. At
+MVP save frequency (debounced ~1.5s after the last edit) this is a
+reasonable number of rows; if that changes, a scheduled job to prune/squash
+old autosave versions is the fix — not switching to in-place mutation.
+
+`/dashboard/[projectId]/edit` is the storyboard editor: add/rename/reorder
+(move up/down)/delete scenes, per-scene duration. Every edit debounces a
+save and shows its status (`Unsaved changes` → `Saving…` → `Saved`, or an
+error). Verified end to end against live Postgres: added/reordered/renamed/
+resized scenes, reloaded the page and confirmed the exact state came back,
+and inspected the saved JSON directly in Postgres to confirm it matches.
+The multi-track timeline (clips on tracks, trim/split, transitions) is the
+next module — scenes already carry a `tracks` array for it to fill in.
 
 ## Frontend
 

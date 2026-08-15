@@ -46,8 +46,8 @@ export default function Home() {
         <p className="text-sm tracking-wide text-[var(--tm-text-dim)]">TOOLMINT</p>
         <h1 className="mt-2 text-3xl font-semibold">ToolMint Video Editor</h1>
         <p className="mt-3 max-w-md text-[var(--tm-text-dim)]">
-          Foundation scaffold — Phase 1 in progress. Auth, the project dashboard,
-          and media upload are live; the editor itself is next.
+          Phase 1 complete, Phase 2 (the editor) underway. Sign in, create a
+          project, and open it to start building a storyboard.
         </p>
         <div className="mt-4 flex gap-3">
           {status === "authenticated" && user ? (
@@ -86,13 +86,6 @@ export default function Home() {
         )}
       </div>
 
-      <p className="text-sm text-[var(--tm-text-dim)]">
-        The editor itself lives at{" "}
-        <a href="/video-editor" className="underline underline-offset-2">
-          /video-editor
-        </a>{" "}
-        once Phase 2 ships.
-      </p>
     </main>
   );
 }

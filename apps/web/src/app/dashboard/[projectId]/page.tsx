@@ -66,7 +66,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ projec
       <div className="mt-3 flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{project.title}</h1>
         <Link
-          href="/video-editor"
+          href={`/dashboard/${projectId}/edit`}
           className="rounded-md bg-[var(--tm-accent)] px-4 py-2 text-sm font-medium text-black"
         >
           Open editor

@@ -30,7 +30,8 @@
     "passport": "latest",
     "passport-jwt": "latest",
     "reflect-metadata": "latest",
-    "rxjs": "latest"
+    "rxjs": "latest",
+    "zod": "latest"
   },
   "devDependencies": {
     "@nestjs/cli": "latest",
