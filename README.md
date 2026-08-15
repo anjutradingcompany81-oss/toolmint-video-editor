@@ -3,9 +3,9 @@
 A browser-based, scene-first video editor: multi-track timeline, non-destructive
 editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
-**Status: Phase 1 (Foundation) in progress.** Done so far: monorepo scaffold,
-database schema, email/password auth, and project CRUD + media upload. Not yet
-built: the dashboard UI (in progress) or the editor itself. See the
+**Status: Phase 1 (Foundation) complete.** Monorepo scaffold, database schema,
+email/password auth, project CRUD, media upload, and the dashboard UI are all
+in and working end to end. Not yet built: the editor itself (Phase 2). See the
 product/systems spec for the full plan (PRD, architecture, DB schema, timeline
 JSON format, rendering pipeline, cost/risk, phased plan).
 
@@ -149,6 +149,35 @@ Notes:
   100MB, PDF 20MB) — placeholders until plan-based limits exist.
 - No malware scanning yet (Phase 4/5 concern per the spec) — only type/size
   validation today.
+
+## Frontend
+
+`apps/web/src/lib` holds the client-side data layer:
+
+- `api-client.ts` — `apiFetch()` wraps every API call: attaches the in-memory
+  access token, and on a 401 transparently refreshes and retries once.
+  `refreshSession()` is the single entry point for calling `/auth/refresh` —
+  concurrent callers (a 401 retry racing the initial mount-time session
+  restore, or React invoking an effect twice) dedupe onto one in-flight
+  request. This isn't optional: refresh tokens rotate on every use, and the
+  API treats a replayed token as theft by revoking every session for that
+  user — two concurrent, undeduped refresh calls from the same starting
+  cookie will lock the user out. (Found and fixed via live browser testing,
+  not something the unit tests catch.)
+- `auth-context.tsx` — `AuthProvider`/`useAuth()`. Access token lives in
+  memory only (not localStorage); a page load has none, so it restores the
+  session via the refresh cookie on mount.
+- `use-require-auth.ts` — redirects to `/login` when unauthenticated; used by
+  every page under `/dashboard`.
+- `projects-api.ts` — typed wrappers for the Projects/Media endpoints.
+
+Pages: `/login`, `/register`, `/forgot-password`, `/reset-password`,
+`/verify-email`, `/dashboard` (list/create/rename/archive/duplicate/delete),
+`/dashboard/[projectId]` (drag-and-drop or click-to-browse upload, media
+grid with type-appropriate previews). No tests yet for `apps/web` — verified
+by live browser walkthrough (register → create → rename → duplicate →
+archive/filter → upload → delete-confirmation → logout) against the real API,
+Postgres, and MinIO.
 
 ## Environment variables
 

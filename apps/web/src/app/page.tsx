@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useAuth } from "@/lib/auth-context";
 
 type ApiStatus =
   | { state: "checking" }
@@ -36,6 +38,7 @@ function useApiHealth() {
 
 export default function Home() {
   const apiStatus = useApiHealth();
+  const { user, status } = useAuth();
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6">
@@ -43,9 +46,28 @@ export default function Home() {
         <p className="text-sm tracking-wide text-[var(--tm-text-dim)]">TOOLMINT</p>
         <h1 className="mt-2 text-3xl font-semibold">ToolMint Video Editor</h1>
         <p className="mt-3 max-w-md text-[var(--tm-text-dim)]">
-          Foundation scaffold — Phase 1 in progress. Authentication, the project
-          dashboard, and media upload are being built next.
+          Foundation scaffold — Phase 1 in progress. Auth, the project dashboard,
+          and media upload are live; the editor itself is next.
         </p>
+        <div className="mt-4 flex gap-3">
+          {status === "authenticated" && user ? (
+            <Link href="/dashboard" className="rounded-md bg-[var(--tm-accent)] px-4 py-2 text-sm font-medium text-black">
+              Go to dashboard
+            </Link>
+          ) : (
+            <>
+              <Link href="/login" className="rounded-md bg-[var(--tm-accent)] px-4 py-2 text-sm font-medium text-black">
+                Sign in
+              </Link>
+              <Link
+                href="/register"
+                className="rounded-md border border-[var(--tm-line)] px-4 py-2 text-sm font-medium hover:border-[var(--tm-accent)]"
+              >
+                Create account
+              </Link>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-4">
