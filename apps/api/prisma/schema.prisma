@@ -1,0 +1,207 @@
+// ToolMint Video Editor — Phase 1 (Foundation) schema.
+// Only the entities Auth, Dashboard, Project-creation, and Media-upload need.
+// Scene/Track/TimelineItem/VoiceOver/ExportJob/etc. are added when their
+// owning module is built (see docs/PRD for the full entity list).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  EDITOR
+  REVIEWER
+  VIEWER
+}
+
+enum ProjectAspectRatio {
+  RATIO_16_9
+  RATIO_9_16
+  RATIO_1_1
+  RATIO_4_5
+  RATIO_21_9
+  CUSTOM
+}
+
+enum MediaAssetKind {
+  VIDEO
+  IMAGE
+  AUDIO
+  DOCUMENT
+}
+
+enum MediaAssetStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  displayName       String
+  emailVerifiedAt   DateTime?
+  mfaEnabled        Boolean   @default(false)
+  mfaSecret         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  memberships       Membership[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+  passwordResets    PasswordResetToken[]
+  emailVerifications EmailVerificationToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  projects    Project[]
+  auditLogs   AuditLog[]
+
+  @@map("workspaces")
+}
+
+model Membership {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        MembershipRole @default(OWNER)
+  createdAt   DateTime       @default(now())
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@map("memberships")
+}
+
+model Project {
+  id            String             @id @default(cuid())
+  workspaceId   String
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title         String
+  aspectRatio   ProjectAspectRatio @default(RATIO_16_9)
+  customWidth   Int?
+  customHeight  Int?
+  fps           Int                @default(30)
+  thumbnailUrl  String?
+  isArchived    Boolean            @default(false)
+  createdById   String
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  versions      ProjectVersion[]
+  mediaAssets   MediaAsset[]
+
+  @@index([workspaceId])
+  @@map("projects")
+}
+
+model ProjectVersion {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Timeline composition — see docs/PRD "Timeline JSON specification".
+  // Validated against the shared schema in packages/types before it is
+  // ever written here; this column is never hand-edited.
+  composition Json
+  label       String?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@map("project_versions")
+}
+
+model MediaAsset {
+  id          String            @id @default(cuid())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind        MediaAssetKind
+  status      MediaAssetStatus  @default(UPLOADING)
+  originalName String
+  storageKey  String            @unique
+  proxyKey    String?
+  mimeType    String
+  byteSize    Int
+  durationMs  Int?
+  width       Int?
+  height      Int?
+  checksum    String?
+  uploadedById String
+  createdAt   DateTime          @default(now())
+
+  @@index([projectId])
+  @@map("media_assets")
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  actorId     String?
+  actor       User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  action      String
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId])
+  @@map("audit_logs")
+}

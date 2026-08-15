@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+.next/
+dist/
+build/
+out/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+
+# testing
+coverage/
+
+# misc
+.DS_Store
+*.pem
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# typescript incremental build cache
+*.tsbuildinfo
+
+# prisma
+apps/api/prisma/dev.db
+
+# local object storage / docker volumes
+.docker-data/
