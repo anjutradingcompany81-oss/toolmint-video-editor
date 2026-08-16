@@ -5,23 +5,26 @@ editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
 **Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
 Auth, project CRUD, media upload, and the dashboard are done. The storyboard
-editor and a first pass at the multi-track timeline (place/move/trim/split/
-delete clips on video and audio tracks) are done. Not yet built: text
-overlays, transitions, real-time preview/playback, or FFmpeg rendering. See
-the product/systems spec for the full plan (PRD, architecture, DB schema,
-timeline JSON format, rendering pipeline, cost/risk, phased plan).
+editor, a first pass at the multi-track timeline (place/move/trim/split/
+delete clips), and a first pass at rendering (export a scene to a real MP4)
+are done. Not yet built: text overlays, transitions, or real-time preview/
+playback in the editor itself. See the product/systems spec for the full
+plan (PRD, architecture, DB schema, timeline JSON format, rendering
+pipeline, cost/risk, phased plan).
 
 ## Stack
 
 - **apps/web** — Next.js (App Router) + TypeScript + Tailwind CSS
 - **apps/api** — NestJS + TypeScript + Prisma (PostgreSQL)
-- **Infra** — PostgreSQL, Redis (BullMQ later), S3-compatible object storage
-  (MinIO locally; swap for AWS S3 / R2 / B2 in production via env vars only)
+- **Infra** — PostgreSQL, Redis (BullMQ render queue), S3-compatible object
+  storage (MinIO locally; swap for AWS S3 / R2 / B2 in production via env
+  vars only), FFmpeg (bundled static binary — no system install needed)
 
 ## Prerequisites
 
 - Node.js 20+
-- Docker Desktop (for Postgres / Redis / MinIO)
+- Docker Desktop (for Postgres / Redis / MinIO) — or WSL2 with Postgres/
+  Redis/MinIO installed natively, see "Running infra without Docker" below
 
 ## Quick start
 
@@ -51,6 +54,37 @@ on the API confirms the database connection.
 > automatically or need remapping — update `DATABASE_URL` / `REDIS_URL` /
 > `WEB_APP_URL` in `apps/api/.env` to match.
 
+## Running infra without Docker
+
+Docker Desktop is unreliable on this machine (`com.docker.backend.exe`
+crashes on launch with `exit status 150`, a WSL2/virtualization-layer
+failure). Postgres 18, Redis 8, and MinIO run natively inside WSL2's
+Ubuntu distro instead, as systemd services, reachable from Windows at
+`127.0.0.1:5433` / `127.0.0.1:6380` / `127.0.0.1:9000` (remapped off the
+defaults to not collide with another project on this machine — see
+`apps/api/.env`).
+
+**The one thing that matters if you use this setup: keep a long-lived WSL
+process running whenever the API is running.** WSL2's lightweight VM shuts
+itself down a few seconds after the last attached process exits, and the
+*next* `wsl` invocation silently reboots it from scratch — which restarts
+every systemd service inside, including Postgres/Redis/MinIO, killing
+whatever had a connection open. This looked exactly like flaky networking
+(intermittent `ECONNREFUSED` / `P1001 Can't reach database server`) and
+cost a lot of time to diagnose as VM churn instead. The fix is to hold the
+VM open for the whole dev session:
+
+```bash
+# run once, in the background, before starting the API
+wsl -d Ubuntu -- sleep infinity &
+```
+
+With that running, the WSL VM (and everything in it) stays up indefinitely
+and the API's Postgres/Redis connections stay alive normally — no
+special retry logic needed. Without it, expect the API to work for the
+first request or two after each `wsl` command and then start throwing
+connection errors as the VM tears itself down again.
+
 ## Project structure
 
 ```
@@ -74,6 +108,19 @@ scaling — see the architecture doc.
 | `npm run test` | Run tests (API only, for now) |
 | `npm run prisma:generate` | Regenerate the Prisma client after a schema change |
 | `npm run prisma:migrate` | Create/apply a migration in dev |
+
+> **Note:** on this machine (Windows, project under a OneDrive-synced path),
+> Jest's file crawler has intermittently under-reported `apps/api/src` —
+> `jest --listTests` silently returning only a handful of files (always the
+> ones most recently written) instead of every `*.spec.ts` file, with no
+> error. Ruled out: stale cache (`--clearCache` and a fresh
+> `--cacheDirectory` didn't help), Watchman (not installed), file or
+> directory mtime (touching either didn't help), and the Jest major version
+> (pinning `jest`/`ts-jest`/`@types/jest` to `^29` instead of `latest`
+> didn't help either). The only fix found was re-writing each missing
+> spec file's content. Root cause unconfirmed — if `npm test` ever reports
+> suspiciously few suites, run `jest --listTests` before trusting a clean
+> result, and re-save any spec file that's missing.
 
 ## Database
 
@@ -210,6 +257,55 @@ refused; split a clip at the playhead and confirmed the two halves'
 start-time field; deleted a clip (and confirmed the confirm-guard actually
 blocks an unconfirmed delete); reloaded the page after every step and got
 back the exact same state each time.
+
+## Rendering & export
+
+| Endpoint | What it does |
+|---|---|
+| `POST /projects/:id/exports` | Start a render — body `{ sceneId, resolution: "R720P" \| "R1080P" }` |
+| `GET /projects/:id/exports` | List a project's export jobs, newest first |
+| `GET /projects/:id/exports/:jobId` | Poll one job; includes a signed download URL once `COMPLETED` |
+
+Architecture: `POST` creates an `ExportJob` row (`QUEUED`) and enqueues it on
+a BullMQ queue backed by Redis. An in-process worker (`RenderProcessor`,
+started alongside the API — a separate worker process is a scaling
+concern for later, not a correctness one now) picks it up, downloads the
+needed source files from object storage to a temp directory, builds an
+FFmpeg `filter_complex` graph, runs a real FFmpeg process (via
+`@ffmpeg-installer/ffmpeg` — a bundled static binary, no system install
+required), uploads the result back to object storage, and updates the job
+to `COMPLETED` with a storage key (or `FAILED` with a message). Progress
+is coarse-grained (stage-based: 5/15/40/90/100), not frame-accurate.
+
+**Scope for this pass:** renders one scene at a time (not a whole
+multi-scene project), from exactly one video track plus at most one audio
+track. Multiple video tracks (which would need real layering/compositing,
+not built yet) are ignored beyond the first. Clips on the rendered track
+must be back-to-back with **no gaps and no overlaps** — the render is
+rejected up front with a specific, actionable message
+(`ffmpeg-command.util.ts`'s `checkContiguous`) rather than silently
+producing wrong output; filling gaps with black/silence and overlap
+layering are follow-up work, not this pass. Output resolution is derived
+from the project's aspect ratio and the chosen 720p/1080p tier
+(`computeDimensions`); images are looped to their placed duration, videos
+are trimmed per clip, and everything is scaled/padded to a common frame
+size before concatenation so mixed source resolutions don't break the
+concat filter.
+
+Code, unit tests (dimension math, contiguity validation, filter-graph
+construction — 16 tests), typecheck, lint, and build are all verified.
+Verified end to end twice against live Postgres/Redis/MinIO: once via raw
+API calls (register, create a project, upload two real FFmpeg-generated
+clips, place them back-to-back on a track, export, poll to `COMPLETED`,
+download, `ffprobe` the output) and once by driving the actual browser UI
+(register, upload through the drop zone, add a track, place a clip, click
+"Export scene", watch the panel go `Queued` → `Ready` with a working
+download link). Both produced a genuine playable H.264 MP4 at the
+requested resolution and duration. The failure path was verified for
+free along the way: an export attempted against a since-changed
+composition correctly failed with `This scene has no video clips to
+render` instead of producing wrong output. See "Running infra without
+Docker" below for what made this fiddly on this machine.
 
 ## Frontend
 

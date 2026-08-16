@@ -42,6 +42,19 @@ enum MediaAssetStatus {
   FAILED
 }
 
+enum ExportResolution {
+  R720P
+  R1080P
+}
+
+enum ExportStatus {
+  QUEUED
+  PROCESSING
+  UPLOADING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id                String    @id @default(cuid())
   email             String    @unique
@@ -146,6 +159,7 @@ model Project {
 
   versions      ProjectVersion[]
   mediaAssets   MediaAsset[]
+  exportJobs    ExportJob[]
 
   @@index([workspaceId])
   @@map("projects")
@@ -187,6 +201,27 @@ model MediaAsset {
 
   @@index([projectId])
   @@map("media_assets")
+}
+
+model ExportJob {
+  id                String           @id @default(cuid())
+  projectId         String
+  project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Renders one scene at a time — full multi-scene project stitching is a
+  // later increment, not this one.
+  sceneId           String
+  resolution        ExportResolution
+  status            ExportStatus     @default(QUEUED)
+  progress          Int              @default(0)
+  errorMessage      String?
+  outputStorageKey  String?
+  outputByteSize    Int?
+  requestedById     String
+  createdAt         DateTime         @default(now())
+  completedAt       DateTime?
+
+  @@index([projectId, createdAt])
+  @@map("export_jobs")
 }
 
 model AuditLog {

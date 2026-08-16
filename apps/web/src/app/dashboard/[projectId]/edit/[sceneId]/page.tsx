@@ -19,6 +19,7 @@ import {
 import SaveIndicator from "@/components/save-indicator";
 import MediaLibrary from "./media-library";
 import TimelineItemBlock from "./timeline-item-block";
+import ExportPanel from "./export-panel";
 
 const PX_PER_SECOND = 60;
 const PLAYHEAD_SNAP_MS = 50;
@@ -259,6 +260,8 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
               </button>
             </div>
           )}
+
+          <ExportPanel projectId={projectId} sceneId={sceneId} />
         </div>
 
         <div className="min-w-0">

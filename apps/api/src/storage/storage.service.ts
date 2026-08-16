@@ -1,3 +1,7 @@
+import { createWriteStream } from "fs";
+import { readFile } from "fs/promises";
+import { pipeline } from "stream/promises";
+import type { Readable } from "stream";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { DeleteObjectCommand, PutObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -39,5 +43,19 @@ export class StorageService {
 
   async delete(key: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  // Render workers need a real local file for ffmpeg to read — streamed
+  // straight to disk rather than buffered in memory, since source media can
+  // be large.
+  async downloadToFile(key: string, localPath: string): Promise<void> {
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (!result.Body) throw new Error(`Object ${key} has no body`);
+    await pipeline(result.Body as Readable, createWriteStream(localPath));
+  }
+
+  async putObjectFromFile(key: string, localPath: string, contentType: string): Promise<void> {
+    const body = await readFile(localPath);
+    await this.putObject(key, body, contentType);
   }
 }
