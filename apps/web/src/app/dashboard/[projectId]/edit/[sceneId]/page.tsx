@@ -8,11 +8,13 @@ import { ApiError } from "@/lib/api-client";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
 import {
   defaultClipDurationMs,
+  newTextItem,
   newTimelineItem,
   newTrack,
   trackAcceptsMediaKind,
+  type MediaTimelineItem,
   type Scene,
-  type TimelineItem,
+  type TextTimelineItem,
   type Track,
   type TrackType,
 } from "@/lib/composition-api";
@@ -108,25 +110,39 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     updateTrack(track.id, (t) => ({ ...t, items: [...t.items, item] }));
   }
 
-  function updateItem(trackId: string, itemId: string, patch: Partial<Pick<TimelineItem, "startMs" | "durationMs">>) {
+  function appendText(track: Track) {
+    if (track.locked) return;
+    const item = newTextItem(trackEndMs(track));
+    updateTrack(track.id, (t) => ({ ...t, items: [...t.items, item] }));
+    setSelected({ trackId: track.id, itemId: item.id });
+  }
+
+  function updateItem(trackId: string, itemId: string, patch: Partial<{ startMs: number; durationMs: number }>) {
     updateTrack(trackId, (t) => ({ ...t, items: t.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) }));
+  }
+
+  function updateTextItem(trackId: string, itemId: string, patch: Partial<Pick<TextTimelineItem, "content" | "fontSize" | "color">>) {
+    updateTrack(trackId, (t) => ({
+      ...t,
+      items: t.items.map((i) => (i.id === itemId && i.type === "text" ? { ...i, ...patch } : i)),
+    }));
   }
 
   function deleteItem(trackId: string, itemId: string) {
     // Matches the confirm-before-delete pattern used for projects/scenes/media
     // elsewhere in this app — there's no undo yet, so this is the only
     // guard against an accidental click losing a placed clip.
-    if (!window.confirm("Delete this clip from the timeline?")) return;
+    if (!window.confirm("Delete this item from the timeline?")) return;
     updateTrack(trackId, (t) => ({ ...t, items: t.items.filter((i) => i.id !== itemId) }));
     setSelected(null);
   }
 
-  function splitAtPlayhead(trackId: string, item: TimelineItem) {
+  function splitAtPlayhead(trackId: string, item: MediaTimelineItem) {
     if (playheadMs <= item.startMs || playheadMs >= item.startMs + item.durationMs) return;
     const leftDuration = playheadMs - item.startMs;
     const rightDuration = item.startMs + item.durationMs - playheadMs;
-    const left: TimelineItem = { ...item, durationMs: leftDuration, trimOutMs: item.trimOutMs + rightDuration };
-    const right: TimelineItem = {
+    const left: MediaTimelineItem = { ...item, durationMs: leftDuration, trimOutMs: item.trimOutMs + rightDuration };
+    const right: MediaTimelineItem = {
       ...item,
       id: `${item.id}_split_${Math.random().toString(36).slice(2, 8)}`,
       startMs: playheadMs,
@@ -209,11 +225,61 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
             >
               + Audio track
             </button>
+            <button
+              onClick={() => addTrack("text")}
+              className="rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
+            >
+              + Text track
+            </button>
           </div>
 
           {selectedItem && selectedTrack && (
             <div className="mt-6 flex flex-col gap-2 rounded-md border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3 text-xs">
-              <h2 className="font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Selected clip</h2>
+              <h2 className="font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Selected {selectedItem.type === "text" ? "text" : "clip"}</h2>
+
+              {selectedItem.type === "text" && (
+                <>
+                  <label className="flex flex-col gap-1">
+                    Text
+                    <textarea
+                      rows={2}
+                      className="rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1"
+                      value={selectedItem.content}
+                      onChange={(e) => {
+                        if (e.target.value.length > 0 && e.target.value.length <= 500) {
+                          updateTextItem(selectedTrack.id, selectedItem.id, { content: e.target.value });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-2">
+                    Font size (px)
+                    <input
+                      type="number"
+                      min="8"
+                      max="300"
+                      className="w-20 rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1"
+                      value={selectedItem.fontSize}
+                      onChange={(e) => {
+                        const size = Number(e.target.value);
+                        if (Number.isFinite(size) && size >= 8 && size <= 300) {
+                          updateTextItem(selectedTrack.id, selectedItem.id, { fontSize: Math.round(size) });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-2">
+                    Color
+                    <input
+                      type="color"
+                      className="h-7 w-14 rounded border border-[var(--tm-line)] bg-[var(--tm-bg)]"
+                      value={selectedItem.color}
+                      onChange={(e) => updateTextItem(selectedTrack.id, selectedItem.id, { color: e.target.value })}
+                    />
+                  </label>
+                </>
+              )}
+
               <label className="flex items-center justify-between gap-2">
                 Start (s)
                 <input
@@ -246,18 +312,20 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                   }}
                 />
               </label>
-              <button
-                onClick={() => splitAtPlayhead(selectedTrack.id, selectedItem)}
-                disabled={playheadMs <= selectedItem.startMs || playheadMs >= selectedItem.startMs + selectedItem.durationMs}
-                className="rounded-md border border-[var(--tm-line)] px-3 py-1.5 hover:border-[var(--tm-accent)] disabled:opacity-40"
-              >
-                Split at playhead
-              </button>
+              {selectedItem.type !== "text" && (
+                <button
+                  onClick={() => splitAtPlayhead(selectedTrack.id, selectedItem)}
+                  disabled={playheadMs <= selectedItem.startMs || playheadMs >= selectedItem.startMs + selectedItem.durationMs}
+                  className="rounded-md border border-[var(--tm-line)] px-3 py-1.5 hover:border-[var(--tm-accent)] disabled:opacity-40"
+                >
+                  Split at playhead
+                </button>
+              )}
               <button
                 onClick={() => deleteItem(selectedTrack.id, selectedItem.id)}
                 className="rounded-md border border-[var(--tm-line)] px-3 py-1.5 text-red-400 hover:border-red-400"
               >
-                Delete clip
+                Delete {selectedItem.type === "text" ? "text" : "clip"}
               </button>
             </div>
           )}
@@ -305,7 +373,10 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                 )}
 
                 {scene.tracks.map((track) => {
-                  const canDrop = Boolean(armedMedia) && !track.locked && trackAcceptsMediaKind(track.type, armedMedia?.kind ?? "");
+                  const isTextTrack = track.type === "text";
+                  const canDrop = !isTextTrack && Boolean(armedMedia) && !track.locked && trackAcceptsMediaKind(track.type, armedMedia?.kind ?? "");
+                  const canAddText = isTextTrack && !track.locked;
+                  const canAct = canDrop || canAddText;
                   return (
                     <div key={track.id} className="flex items-stretch gap-2">
                       <div className="flex w-32 shrink-0 flex-col justify-center gap-1 text-[10px] text-[var(--tm-text-dim)]">
@@ -324,21 +395,36 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                       </div>
 
                       <div
-                        onClick={() => canDrop && appendClip(track)}
-                        role="button"
-                        tabIndex={canDrop ? 0 : -1}
-                        onKeyDown={(e) => {
-                          if (canDrop && (e.key === "Enter" || e.key === " ")) appendClip(track);
+                        onClick={() => {
+                          if (canDrop) appendClip(track);
+                          else if (canAddText) appendText(track);
                         }}
-                        className={`relative h-10 flex-1 rounded border border-dashed border-[var(--tm-line)] bg-[var(--tm-bg)] ${canDrop ? "cursor-pointer" : "cursor-default"}`}
+                        role="button"
+                        tabIndex={canAct ? 0 : -1}
+                        onKeyDown={(e) => {
+                          if (!canAct || (e.key !== "Enter" && e.key !== " ")) return;
+                          if (canDrop) appendClip(track);
+                          else appendText(track);
+                        }}
+                        className={`relative h-10 flex-1 rounded border border-dashed border-[var(--tm-line)] bg-[var(--tm-bg)] ${canAct ? "cursor-pointer" : "cursor-default"}`}
                         style={{ width: Math.max(msToPx(endMs), 300) }}
-                        title={armedMedia ? (canDrop ? "Add selected media here" : "This track can't accept that media type") : "Select media on the left first"}
+                        title={
+                          isTextTrack
+                            ? track.locked
+                              ? "This track is locked"
+                              : "Click to add a text item"
+                            : armedMedia
+                              ? canDrop
+                                ? "Add selected media here"
+                                : "This track can't accept that media type"
+                              : "Select media on the left first"
+                        }
                       >
                         {track.items.map((item) => (
                           <TimelineItemBlock
                             key={item.id}
                             item={item}
-                            media={media.find((a) => a.id === item.mediaAssetId)}
+                            media={item.type === "text" ? undefined : media.find((a) => a.id === item.mediaAssetId)}
                             pxPerSecond={PX_PER_SECOND}
                             selected={selected?.itemId === item.id}
                             onSelect={() => setSelected({ trackId: track.id, itemId: item.id })}
@@ -353,7 +439,8 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
           </div>
 
           <p className="mt-3 text-xs text-[var(--tm-text-dim)]">
-            Playhead: {(playheadMs / 1000).toFixed(2)}s · click the ruler to move it, click a track lane to append the selected media.
+            Playhead: {(playheadMs / 1000).toFixed(2)}s · click the ruler to move it, click a video/audio track lane to
+            append the selected media, click a text track lane to add a text item.
           </p>
         </div>
       </div>

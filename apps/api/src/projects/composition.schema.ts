@@ -9,19 +9,41 @@ export const transformSchema = z.object({
   opacity: z.number().min(0).max(1).default(1),
 });
 
-// Text/title items and effect/transition params are added when the modules
-// that own them (text overlays, transitions) are built — clip/audio placement
-// is this increment's scope.
-export const timelineItemSchema = z.object({
+// Effect/transition params are added when that module is built — clip/audio/
+// text placement is this increment's scope.
+const timelineItemBase = {
   id: z.string().min(1),
-  type: z.enum(["clip", "audio"]),
-  mediaAssetId: z.string().min(1),
   startMs: z.number().int().nonnegative(),
   durationMs: z.number().int().positive(),
+  transform: transformSchema.default({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }),
+};
+
+const mediaItemFields = {
+  mediaAssetId: z.string().min(1),
   trimInMs: z.number().int().nonnegative().default(0),
   trimOutMs: z.number().int().nonnegative().default(0),
-  transform: transformSchema.default({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }),
+};
+
+const clipItemSchema = z.object({ ...timelineItemBase, type: z.literal("clip"), ...mediaItemFields });
+const audioItemSchema = z.object({ ...timelineItemBase, type: z.literal("audio"), ...mediaItemFields });
+
+// Text items aren't backed by a MediaAsset — content/style live on the item
+// itself. Rotation is deliberately not part of the style: the renderer's
+// drawtext filter has no rotation option, so supporting it in the editor
+// would mean the preview and the actual export could disagree — see the
+// README's "Text overlays" section.
+const textItemSchema = z.object({
+  ...timelineItemBase,
+  type: z.literal("text"),
+  content: z.string().min(1).max(500),
+  fontSize: z.number().int().min(8).max(300).default(48),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, "color must be a #rrggbb hex value")
+    .default("#ffffff"),
 });
+
+export const timelineItemSchema = z.discriminatedUnion("type", [clipItemSchema, audioItemSchema, textItemSchema]);
 
 export const trackSchema = z.object({
   id: z.string().min(1),

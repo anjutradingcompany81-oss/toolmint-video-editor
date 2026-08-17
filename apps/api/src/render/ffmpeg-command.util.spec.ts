@@ -73,13 +73,14 @@ describe("checkContiguous", () => {
 
 describe("buildFfmpegArgs", () => {
   it("throws when there are no video segments", () => {
-    expect(() => buildFfmpegArgs({ video: [], audio: [], width: 1280, height: 720, fps: 30, outputPath: "out.mp4" })).toThrow();
+    expect(() => buildFfmpegArgs({ video: [], audio: [], text: [], width: 1280, height: 720, fps: 30, outputPath: "out.mp4" })).toThrow();
   });
 
   it("builds a single-clip, video-only command", () => {
     const args = buildFfmpegArgs({
       video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
       audio: [],
+      text: [],
       width: 1280,
       height: 720,
       fps: 30,
@@ -99,6 +100,7 @@ describe("buildFfmpegArgs", () => {
     const args = buildFfmpegArgs({
       video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000 }],
       audio: [],
+      text: [],
       width: 1280,
       height: 720,
       fps: 30,
@@ -115,6 +117,7 @@ describe("buildFfmpegArgs", () => {
         { localPath: "b.mp4", kind: "video", trimInMs: 1000, durationMs: 3000 },
       ],
       audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 5000 }],
+      text: [],
       width: 1920,
       height: 1080,
       fps: 24,
@@ -127,5 +130,67 @@ describe("buildFfmpegArgs", () => {
     expect(filter).toContain("concat=n=1:v=0:a=1[aout]");
     expect(filter).toContain("[1:v]trim=start=1.000:duration=3.000");
     expect(args).toEqual(expect.arrayContaining(["-map", "[aout]", "-c:a", "aac", "-shortest"]));
+  });
+
+  it("chains a drawtext filter for a text overlay and maps its output instead of [vout]", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      audio: [],
+      text: [{ textFilePath: "text0.txt", startMs: 1000, durationMs: 2000, fontSize: 48, color: "#ffcc00", x: 10, y: -20, opacity: 0.5 }],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).toContain("[vout]drawtext=");
+    expect(filter).toContain("textfile='text0.txt'");
+    expect(filter).toContain("fontsize=48");
+    expect(filter).toContain("fontcolor=0xffcc00@0.5");
+    expect(filter).toContain("x=(w-text_w)/2+10");
+    expect(filter).toContain("y=(h-text_h)/2+-20");
+    expect(filter).toContain("enable='between(t,1.000,3.000)'[vtxt0]");
+    expect(args).toEqual(expect.arrayContaining(["-map", "[vtxt0]"]));
+    expect(args).not.toContain("[vout]");
+  });
+
+  it("chains multiple text overlays in order, each feeding the next", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      audio: [],
+      text: [
+        { textFilePath: "text0.txt", startMs: 0, durationMs: 2000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 },
+        { textFilePath: "text1.txt", startMs: 2000, durationMs: 2000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 },
+      ],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).toContain("[vout]drawtext=");
+    expect(filter).toContain("[vtxt0]drawtext=");
+    expect(filter).toContain("[vtxt1]");
+    expect(args).toEqual(expect.arrayContaining(["-map", "[vtxt1]"]));
+  });
+
+  it("escapes a Windows-style font/text path so the colon and backslashes don't break filter parsing", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      audio: [],
+      text: [{ textFilePath: "C:\\Users\\me\\AppData\\text0.txt", startMs: 0, durationMs: 1000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 }],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).toContain("textfile='C\\:/Users/me/AppData/text0.txt'");
   });
 });

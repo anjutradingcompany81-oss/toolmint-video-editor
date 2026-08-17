@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { mkdtemp, rm, stat } from "fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { extname, join } from "path";
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
@@ -11,7 +11,11 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { compositionSchema, type Scene, type TimelineItem } from "../projects/composition.schema";
 import { RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.constants";
-import { buildFfmpegArgs, checkContiguous, computeDimensions, type AudioSegment, type VideoSegment } from "./ffmpeg-command.util";
+import { buildFfmpegArgs, checkContiguous, computeDimensions, type AudioSegment, type TextOverlay, type VideoSegment } from "./ffmpeg-command.util";
+
+type ClipItem = Extract<TimelineItem, { type: "clip" }>;
+type AudioItem = Extract<TimelineItem, { type: "audio" }>;
+type TextItem = Extract<TimelineItem, { type: "text" }>;
 
 @Injectable()
 export class RenderProcessor implements OnModuleDestroy {
@@ -50,16 +54,16 @@ export class RenderProcessor implements OnModuleDestroy {
       const scene = composition.scenes.find((s) => s.id === exportJob.sceneId);
       if (!scene) throw new Error("Scene not found in the current composition");
 
-      const { videoTrack, audioTrack } = this.pickTracks(scene);
+      const { videoItems, audioItems, textItems } = this.pickTracks(scene);
 
       await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 15);
 
-      const mediaAssetIds = [...videoTrack.items, ...(audioTrack?.items ?? [])].map((i) => i.mediaAssetId);
+      const mediaAssetIds = [...videoItems, ...audioItems].map((i) => i.mediaAssetId);
       const assets = await this.prisma.mediaAsset.findMany({ where: { id: { in: mediaAssetIds } } });
       const assetById = new Map(assets.map((a) => [a.id, a]));
 
       const videoSegments: VideoSegment[] = [];
-      for (const [index, item] of this.sortByStart(videoTrack.items).entries()) {
+      for (const [index, item] of this.sortByStart(videoItems).entries()) {
         const asset = assetById.get(item.mediaAssetId);
         if (!asset) throw new Error(`Media asset ${item.mediaAssetId} not found`);
         const localPath = join(workDir, `v${index}${extname(asset.storageKey) || ".bin"}`);
@@ -73,21 +77,43 @@ export class RenderProcessor implements OnModuleDestroy {
       }
 
       const audioSegments: AudioSegment[] = [];
-      if (audioTrack) {
-        for (const [index, item] of this.sortByStart(audioTrack.items).entries()) {
-          const asset = assetById.get(item.mediaAssetId);
-          if (!asset) throw new Error(`Media asset ${item.mediaAssetId} not found`);
-          const localPath = join(workDir, `a${index}${extname(asset.storageKey) || ".bin"}`);
-          await this.storage.downloadToFile(asset.storageKey, localPath);
-          audioSegments.push({ localPath, trimInMs: item.trimInMs, durationMs: item.durationMs });
-        }
+      for (const [index, item] of this.sortByStart(audioItems).entries()) {
+        const asset = assetById.get(item.mediaAssetId);
+        if (!asset) throw new Error(`Media asset ${item.mediaAssetId} not found`);
+        const localPath = join(workDir, `a${index}${extname(asset.storageKey) || ".bin"}`);
+        await this.storage.downloadToFile(asset.storageKey, localPath);
+        audioSegments.push({ localPath, trimInMs: item.trimInMs, durationMs: item.durationMs });
+      }
+
+      const textOverlays: TextOverlay[] = [];
+      for (const [index, item] of textItems.entries()) {
+        const textFilePath = join(workDir, `text${index}.txt`);
+        await writeFile(textFilePath, item.content, "utf8");
+        textOverlays.push({
+          textFilePath,
+          startMs: item.startMs,
+          durationMs: item.durationMs,
+          fontSize: Math.max(1, Math.round(item.fontSize * item.transform.scale)),
+          color: item.color,
+          x: item.transform.x,
+          y: item.transform.y,
+          opacity: item.transform.opacity,
+        });
       }
 
       await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 40);
 
       const { width, height } = computeDimensions(project.aspectRatio, exportJob.resolution, project.customWidth, project.customHeight);
       const outputPath = join(workDir, "output.mp4");
-      const args = buildFfmpegArgs({ video: videoSegments, audio: audioSegments, width, height, fps: project.fps, outputPath });
+      const args = buildFfmpegArgs({
+        video: videoSegments,
+        audio: audioSegments,
+        text: textOverlays,
+        width,
+        height,
+        fps: project.fps,
+        outputPath,
+      });
 
       await this.runFfmpeg(args);
       await this.setStatus(exportJob.id, ExportStatus.UPLOADING, 90);
@@ -115,24 +141,34 @@ export class RenderProcessor implements OnModuleDestroy {
     }
   }
 
-  // Scoped to one video track + at most one audio track — see the README
-  // for why (no layering/overlay compositing yet).
-  private pickTracks(scene: Scene): { videoTrack: Scene["tracks"][number]; audioTrack: Scene["tracks"][number] | undefined } {
+  // Video/audio are scoped to one track each — see the README for why (no
+  // layering/overlay compositing for clips yet). Text is different: it's
+  // meant to layer over the video, so every text track's items are
+  // collected (not just the first) and none of them need to be contiguous —
+  // overlapping captions/titles just stack in the drawtext chain.
+  private pickTracks(scene: Scene): { videoItems: ClipItem[]; audioItems: AudioItem[]; textItems: TextItem[] } {
     const videoTrack = scene.tracks.find((t) => t.type === "video" && t.items.length > 0);
     if (!videoTrack) throw new Error("This scene has no video clips to render");
-    const contiguity = checkContiguous(videoTrack.items);
+    const videoItems = videoTrack.items.filter((i): i is ClipItem => i.type === "clip");
+    const contiguity = checkContiguous(videoItems);
     if (!contiguity.ok) throw new Error(contiguity.reason);
 
     const audioTrack = scene.tracks.find((t) => t.type === "audio" && t.items.length > 0);
+    const audioItems = audioTrack ? audioTrack.items.filter((i): i is AudioItem => i.type === "audio") : [];
     if (audioTrack) {
-      const audioContiguity = checkContiguous(audioTrack.items);
+      const audioContiguity = checkContiguous(audioItems);
       if (!audioContiguity.ok) throw new Error(`Audio track: ${audioContiguity.reason}`);
     }
 
-    return { videoTrack, audioTrack };
+    const textItems = scene.tracks
+      .filter((t) => t.type === "text")
+      .flatMap((t) => t.items)
+      .filter((i): i is TextItem => i.type === "text");
+
+    return { videoItems, audioItems, textItems };
   }
 
-  private sortByStart(items: TimelineItem[]): TimelineItem[] {
+  private sortByStart<T extends { startMs: number }>(items: T[]): T[] {
     return [...items].sort((a, b) => a.startMs - b.startMs);
   }
 

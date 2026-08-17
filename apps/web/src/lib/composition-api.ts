@@ -1,7 +1,7 @@
 import { apiFetch } from "./api-client";
 
 export type TrackType = "video" | "audio" | "text" | "overlay";
-export type TimelineItemType = "clip" | "audio";
+export type TimelineItemType = "clip" | "audio" | "text";
 
 export interface Transform {
   x: number;
@@ -11,9 +11,9 @@ export interface Transform {
   opacity: number;
 }
 
-export interface TimelineItem {
+export interface MediaTimelineItem {
   id: string;
-  type: TimelineItemType;
+  type: "clip" | "audio";
   mediaAssetId: string;
   startMs: number;
   durationMs: number;
@@ -21,6 +21,22 @@ export interface TimelineItem {
   trimOutMs: number;
   transform: Transform;
 }
+
+// No mediaAssetId — content/style live on the item itself. Rotation is
+// deliberately not editable for text: the render pipeline's drawtext filter
+// has no rotation option, so the preview and the export would disagree.
+export interface TextTimelineItem {
+  id: string;
+  type: "text";
+  content: string;
+  fontSize: number;
+  color: string;
+  startMs: number;
+  durationMs: number;
+  transform: Transform;
+}
+
+export type TimelineItem = MediaTimelineItem | TextTimelineItem;
 
 export interface Track {
   id: string;
@@ -78,7 +94,7 @@ export function defaultTransform(): Transform {
   return { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
 }
 
-export function newTimelineItem(mediaAssetId: string, type: TimelineItemType, startMs: number, durationMs: number): TimelineItem {
+export function newTimelineItem(mediaAssetId: string, type: "clip" | "audio", startMs: number, durationMs: number): MediaTimelineItem {
   return {
     id: randomId("itm"),
     type,
@@ -87,6 +103,22 @@ export function newTimelineItem(mediaAssetId: string, type: TimelineItemType, st
     durationMs,
     trimInMs: 0,
     trimOutMs: 0,
+    transform: defaultTransform(),
+  };
+}
+
+export const DEFAULT_TEXT_CONTENT = "Text";
+export const DEFAULT_TEXT_DURATION_MS = 3000;
+
+export function newTextItem(startMs: number): TextTimelineItem {
+  return {
+    id: randomId("itm"),
+    type: "text",
+    content: DEFAULT_TEXT_CONTENT,
+    fontSize: 48,
+    color: "#ffffff",
+    startMs,
+    durationMs: DEFAULT_TEXT_DURATION_MS,
     transform: defaultTransform(),
   };
 }

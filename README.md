@@ -6,9 +6,10 @@ editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 **Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
 Auth, project CRUD, media upload, and the dashboard are done. The storyboard
 editor, a first pass at the multi-track timeline (place/move/trim/split/
-delete clips), a first pass at rendering (export a scene to a real MP4), and
-a real-time canvas preview player (play/pause/scrub what's actually on the
-timeline) are done. Not yet built: text overlays or transitions. See the
+delete clips), a first pass at rendering (export a scene to a real MP4), a
+real-time canvas preview player (play/pause/scrub what's actually on the
+timeline), and text overlays (added, styled, and burned into the actual
+export via FFmpeg's drawtext) are done. Not yet built: transitions. See the
 product/systems spec for the full plan (PRD, architecture, DB schema,
 timeline JSON format, rendering pipeline, cost/risk, phased plan).
 
@@ -240,9 +241,9 @@ pointer-drag interaction that's fragile to automate and awkward on touch.
 Real drag-and-drop placement and drag-to-trim handles are UX polish that
 can be layered on top of the same data model later without a rework.
 
-**What's deliberately out of scope for this pass:** text overlays and
-transitions (only `clip`/`audio` item types exist so far — the schema's
-`type` field is ready to extend), and real source duration —
+**What's deliberately out of scope for this pass:** transitions (`clip`/
+`audio`/`text` item types exist — see "Text overlays" below — but nothing
+for cross-fades or wipes between clips yet), and real source duration —
 `MediaAsset.durationMs` is never populated (no ffprobe integration yet),
 so new clips get a placeholder duration (3s for images, 5s for video/audio)
 with no validation that trims stay within the actual source length. That
@@ -300,6 +301,47 @@ the readout and the ruler's playhead advance in lockstep, confirmed
 playback auto-stops at exactly the scene's end, and confirmed clicking the
 ruler while paused scrubs the canvas to the correct frame.
 
+## Text overlays
+
+A `text` track type holds `text`-type timeline items — no `MediaAsset`
+behind them; content/font size/color live directly on the item
+(`composition.schema.ts`'s `timelineItemSchema` is a Zod discriminated
+union on `type` now: `clip`/`audio` items are still backed by a
+`mediaAssetId`, `text` items aren't). Add a text track from the timeline
+editor's Tracks panel, then click its lane to append a default item —
+selecting it shows Text/Font size/Color fields alongside the usual Start/
+Duration. Unlike video/audio tracks, a scene can have any number of text
+tracks and their items never need to be contiguous or non-overlapping —
+overlapping captions/titles are meant to stack.
+
+**Rendered for real, not just a UI mockup:** the render pipeline chains a
+`drawtext` filter per active text item onto the video output
+(`ffmpeg-command.util.ts`), gated by `enable='between(t,start,end)'` so
+each one is only visible during its own time range. Two choices worth
+calling out:
+- **Font:** bundled via the `dejavu-fonts-ttf` npm package (dependency-
+  free, ships real `.ttf` files) rather than relying on whatever fonts
+  happen to be on the host — matters most on a bare Linux prod server,
+  which usually has none.
+- **Text content goes through a file (`textfile=`), not inlined into the
+  filter string.** FFmpeg drawtext's inline-text escaping rules (colons,
+  quotes, percent signs each need different treatment) are fragile enough
+  that a temp `.txt` file per overlay was the more correct choice — only
+  the file *path* needs escaping (Windows drive-letter colons,
+  backslashes), not arbitrary user-typed content.
+
+**Known limitation, deliberate:** rotation isn't editable for text, in
+either the preview or the export. FFmpeg's `drawtext` filter has no
+rotation option — supporting it in the editor would mean preview and
+export could visibly disagree, which is worse than not having it.
+
+Verified live end to end: added a text track and item through the actual
+UI, edited content/font size/color, confirmed the saved composition
+matches server-side, confirmed the canvas preview paints the text in the
+right color/content, exported the scene, downloaded the real output MP4,
+and extracted a frame with `ffmpeg` — the text is genuinely burned into
+the video, not just visible in the editor.
+
 ## Rendering & export
 
 | Endpoint | What it does |
@@ -321,21 +363,24 @@ is coarse-grained (stage-based: 5/15/40/90/100), not frame-accurate.
 
 **Scope for this pass:** renders one scene at a time (not a whole
 multi-scene project), from exactly one video track plus at most one audio
-track. Multiple video tracks (which would need real layering/compositing,
-not built yet) are ignored beyond the first. Clips on the rendered track
-must be back-to-back with **no gaps and no overlaps** — the render is
-rejected up front with a specific, actionable message
-(`ffmpeg-command.util.ts`'s `checkContiguous`) rather than silently
-producing wrong output; filling gaps with black/silence and overlap
-layering are follow-up work, not this pass. Output resolution is derived
-from the project's aspect ratio and the chosen 720p/1080p tier
-(`computeDimensions`); images are looped to their placed duration, videos
-are trimmed per clip, and everything is scaled/padded to a common frame
-size before concatenation so mixed source resolutions don't break the
-concat filter.
+track — plus *every* text track's items (text is meant to layer over the
+video, so unlike clips it isn't limited to one track and doesn't need to
+be contiguous; see "Text overlays" above). Multiple video/audio tracks
+(which would need real layering/compositing, not built yet) are ignored
+beyond the first of each. Clips on the rendered video/audio track must be
+back-to-back with **no gaps and no overlaps** — the render is rejected up
+front with a specific, actionable message (`ffmpeg-command.util.ts`'s
+`checkContiguous`) rather than silently producing wrong output; filling
+gaps with black/silence and overlap layering are follow-up work, not this
+pass. Output resolution is derived from the project's aspect ratio and the
+chosen 720p/1080p tier (`computeDimensions`); images are looped to their
+placed duration, videos are trimmed per clip, and everything is
+scaled/padded to a common frame size before concatenation so mixed source
+resolutions don't break the concat filter.
 
-Code, unit tests (dimension math, contiguity validation, filter-graph
-construction — 16 tests), typecheck, lint, and build are all verified.
+Code, unit tests (dimension math, contiguity validation, filter-graph and
+text-overlay drawtext-chain construction, Windows path escaping — 19
+tests), typecheck, lint, and build are all verified.
 Verified end to end twice against live Postgres/Redis/MinIO: once via raw
 API calls (register, create a project, upload two real FFmpeg-generated
 clips, place them back-to-back on a track, export, poll to `COMPLETED`,

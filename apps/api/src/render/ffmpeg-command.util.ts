@@ -1,6 +1,17 @@
 // Pure helpers for planning a render — deliberately kept free of any file
 // I/O or process spawning so the logic (dimensions, contiguity, the
 // filter_complex graph) can be unit tested without a real ffmpeg binary.
+// (DEFAULT_FONT_PATH is a resolved constant, not I/O — require.resolve just
+// walks node_modules, it doesn't touch the font file itself.)
+
+import { dirname, join } from "path";
+
+// Bundled so text overlays render identically regardless of what fonts (if
+// any) happen to be installed on the host — matters most on a bare Linux
+// prod server, which usually has none. Dependency-free npm package shipping
+// raw .ttf files (most font packages ship woff/woff2 only, which this
+// ffmpeg build's libfreetype may not read).
+export const DEFAULT_FONT_PATH = join(dirname(require.resolve("dejavu-fonts-ttf/package.json")), "ttf", "DejaVuSans.ttf");
 
 const ASPECT_RATIOS: Record<string, number> = {
   RATIO_16_9: 16 / 9,
@@ -70,9 +81,27 @@ export interface AudioSegment {
   durationMs: number;
 }
 
+// content is pre-written to textFilePath (by the caller, which already does
+// file I/O for downloading source media) rather than passed as a string and
+// inlined into the filter here — ffmpeg drawtext's inline-text escaping
+// rules are notoriously fragile (colons, quotes, percent signs all need
+// different treatment), and a text file sidesteps nearly all of it. Only
+// the path itself needs escaping, not arbitrary user content.
+export interface TextOverlay {
+  textFilePath: string;
+  startMs: number;
+  durationMs: number;
+  fontSize: number;
+  color: string; // #rrggbb
+  x: number;
+  y: number;
+  opacity: number;
+}
+
 export interface RenderPlan {
   video: VideoSegment[];
   audio: AudioSegment[];
+  text: TextOverlay[];
   width: number;
   height: number;
   fps: number;
@@ -81,6 +110,17 @@ export interface RenderPlan {
 
 function sec(ms: number): string {
   return (ms / 1000).toFixed(3);
+}
+
+// ffmpeg's filtergraph parser treats ':' as an option separator and '\' as
+// its escape character, so a raw Windows path (drive-letter colon,
+// backslash separators) breaks filter parsing unless normalized first.
+function escapeFilterPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/:/g, "\\:");
+}
+
+function hexToFfmpegColor(hex: string): string {
+  return `0x${hex.slice(1)}`;
 }
 
 export function buildFfmpegArgs(plan: RenderPlan): string[] {
@@ -114,6 +154,24 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
   });
   filterParts.push(`${videoLabels.join("")}concat=n=${plan.video.length}:v=1:a=0[vout]`);
 
+  // Each overlay is its own drawtext link in the chain, independently gated
+  // by `enable`, so overlapping text items (unlike video/audio clips) just
+  // stack — no contiguity requirement.
+  let finalVideoLabel = "vout";
+  plan.text.forEach((overlay, i) => {
+    const inLabel = finalVideoLabel;
+    const outLabel = `vtxt${i}`;
+    const startS = sec(overlay.startMs);
+    const endS = sec(overlay.startMs + overlay.durationMs);
+    filterParts.push(
+      `[${inLabel}]drawtext=fontfile='${escapeFilterPath(DEFAULT_FONT_PATH)}':textfile='${escapeFilterPath(overlay.textFilePath)}':` +
+        `reload=0:fontsize=${overlay.fontSize}:fontcolor=${hexToFfmpegColor(overlay.color)}@${overlay.opacity}:` +
+        `x=(w-text_w)/2+${Math.round(overlay.x)}:y=(h-text_h)/2+${Math.round(overlay.y)}:` +
+        `enable='between(t,${startS},${endS})'[${outLabel}]`,
+    );
+    finalVideoLabel = outLabel;
+  });
+
   const audioLabels: string[] = [];
   const audioInputOffset = plan.video.length;
   plan.audio.forEach((seg, i) => {
@@ -127,7 +185,7 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
   }
 
   args.push("-filter_complex", filterParts.join(";"));
-  args.push("-map", "[vout]");
+  args.push("-map", `[${finalVideoLabel}]`);
   args.push("-r", String(plan.fps));
   args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p");
 

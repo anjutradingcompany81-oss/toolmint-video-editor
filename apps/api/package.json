@@ -28,6 +28,7 @@
     "class-transformer": "latest",
     "class-validator": "latest",
     "cookie-parser": "latest",
+    "dejavu-fonts-ttf": "^2.37.3",
     "ioredis": "latest",
     "multer": "latest",
     "passport": "latest",

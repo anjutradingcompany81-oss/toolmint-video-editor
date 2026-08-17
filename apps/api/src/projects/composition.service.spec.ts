@@ -173,5 +173,81 @@ describe("CompositionService", () => {
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it("accepts a text item and fills in style defaults", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "text",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "text", content: "Hello", startMs: 0, durationMs: 3000 }],
+              },
+            ],
+          },
+        ],
+      };
+      prisma.projectVersion.create.mockResolvedValue({ id: "ver_4", composition, createdAt: new Date() });
+
+      await service.save("user_1", "proj_1", composition);
+
+      const savedItem = prisma.projectVersion.create.mock.calls[0][0].data.composition.scenes[0].tracks[0].items[0];
+      expect(savedItem).toMatchObject({ content: "Hello", fontSize: 48, color: "#ffffff" });
+    });
+
+    it("rejects a text item with no content", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "text",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "text", content: "", startMs: 0, durationMs: 3000 }],
+              },
+            ],
+          },
+        ],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("rejects a text item with a non-hex color", async () => {
+      const composition = {
+        ...buildComposition(),
+        scenes: [
+          {
+            id: "scn_1",
+            name: "Intro",
+            durationMs: 5000,
+            tracks: [
+              {
+                id: "trk_1",
+                type: "text",
+                locked: false,
+                muted: false,
+                items: [{ id: "itm_1", type: "text", content: "Hi", color: "red", startMs: 0, durationMs: 3000 }],
+              },
+            ],
+          },
+        ],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });

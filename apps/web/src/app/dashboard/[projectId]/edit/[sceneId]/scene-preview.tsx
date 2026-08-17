@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AspectRatio, MediaAsset } from "@/lib/projects-api";
-import type { Scene, Track, TimelineItem, Transform } from "@/lib/composition-api";
+import type { MediaTimelineItem, Scene, TextTimelineItem, Track, Transform } from "@/lib/composition-api";
 
 const ASPECT_RATIOS: Record<AspectRatio, [number, number]> = {
   RATIO_16_9: [16, 9],
@@ -27,8 +27,22 @@ function previewDimensions(aspectRatio: AspectRatio, customWidth: number | null,
     : { width: Math.round(PREVIEW_MAX_PX * ratio), height: PREVIEW_MAX_PX };
 }
 
-function activeItem(track: Track | undefined, ms: number): TimelineItem | undefined {
-  return track?.items.find((i) => ms >= i.startMs && ms < i.startMs + i.durationMs);
+function isActive(item: { startMs: number; durationMs: number }, ms: number): boolean {
+  return ms >= item.startMs && ms < item.startMs + item.durationMs;
+}
+
+function activeMediaItem(track: Track | undefined, ms: number): MediaTimelineItem | undefined {
+  return track?.items.find((i): i is MediaTimelineItem => i.type !== "text" && isActive(i, ms));
+}
+
+// Every text track's active items, not just the first — unlike the single
+// video/audio track this preview mirrors, overlapping captions/titles are
+// meant to stack (matches the renderer's own text handling).
+function activeTextItems(scene: Scene, ms: number): TextTimelineItem[] {
+  return scene.tracks
+    .filter((t) => t.type === "text")
+    .flatMap((t) => t.items)
+    .filter((i): i is TextTimelineItem => i.type === "text" && isActive(i, ms));
 }
 
 function formatTime(ms: number): string {
@@ -125,25 +139,46 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     activeAudioIdRef.current = null;
   }
 
-  function drawFrame(el: HTMLVideoElement | HTMLImageElement | null, naturalW: number, naturalH: number, transform: Transform | undefined) {
+  function drawFrame(
+    el: HTMLVideoElement | HTMLImageElement | null,
+    naturalW: number,
+    naturalH: number,
+    transform: Transform | undefined,
+    textItems: TextTimelineItem[],
+  ) {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (!el || !naturalW || !naturalH || !transform) return;
 
-    const fitScale = Math.min(canvas.width / naturalW, canvas.height / naturalH);
-    const drawW = naturalW * fitScale * transform.scale;
-    const drawH = naturalH * fitScale * transform.scale;
+    if (el && naturalW && naturalH && transform) {
+      const fitScale = Math.min(canvas.width / naturalW, canvas.height / naturalH);
+      const drawW = naturalW * fitScale * transform.scale;
+      const drawH = naturalH * fitScale * transform.scale;
 
-    ctx.save();
-    ctx.globalAlpha = transform.opacity;
-    ctx.translate(canvas.width / 2 + transform.x, canvas.height / 2 + transform.y);
-    ctx.rotate((transform.rotation * Math.PI) / 180);
-    ctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
-    ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = transform.opacity;
+      ctx.translate(canvas.width / 2 + transform.x, canvas.height / 2 + transform.y);
+      ctx.rotate((transform.rotation * Math.PI) / 180);
+      ctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    }
+
+    // Rotation is deliberately not applied here — the render pipeline's
+    // drawtext filter has no rotation option, and this preview is meant to
+    // match what export actually produces, not what canvas can do.
+    for (const item of textItems) {
+      ctx.save();
+      ctx.globalAlpha = item.transform.opacity;
+      ctx.fillStyle = item.color;
+      ctx.font = `${Math.round(item.fontSize * item.transform.scale)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(item.content, canvas.width / 2 + item.transform.x, canvas.height / 2 + item.transform.y);
+      ctx.restore();
+    }
   }
 
   function render(ms: number) {
@@ -152,8 +187,9 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     const currentMediaById = mediaByIdRef.current;
     const videoTrack = currentScene.tracks.find((t) => t.type === "video" && t.items.length > 0);
     const audioTrack = currentScene.tracks.find((t) => t.type === "audio" && t.items.length > 0);
-    const vItem = activeItem(videoTrack, ms);
-    const aItem = activeItem(audioTrack, ms);
+    const vItem = activeMediaItem(videoTrack, ms);
+    const aItem = activeMediaItem(audioTrack, ms);
+    const textItems = activeTextItems(currentScene, ms);
 
     let drawEl: HTMLVideoElement | HTMLImageElement | null = null;
     let naturalW = 0;
@@ -216,7 +252,7 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
       pauseAllAudio();
     }
 
-    drawFrame(drawEl, naturalW, naturalH, vItem?.transform);
+    drawFrame(drawEl, naturalW, naturalH, vItem?.transform, textItems);
   }
 
   function tick() {
