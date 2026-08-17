@@ -6,11 +6,11 @@ editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 **Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
 Auth, project CRUD, media upload, and the dashboard are done. The storyboard
 editor, a first pass at the multi-track timeline (place/move/trim/split/
-delete clips), and a first pass at rendering (export a scene to a real MP4)
-are done. Not yet built: text overlays, transitions, or real-time preview/
-playback in the editor itself. See the product/systems spec for the full
-plan (PRD, architecture, DB schema, timeline JSON format, rendering
-pipeline, cost/risk, phased plan).
+delete clips), a first pass at rendering (export a scene to a real MP4), and
+a real-time canvas preview player (play/pause/scrub what's actually on the
+timeline) are done. Not yet built: text overlays or transitions. See the
+product/systems spec for the full plan (PRD, architecture, DB schema,
+timeline JSON format, rendering pipeline, cost/risk, phased plan).
 
 ## Stack
 
@@ -242,12 +242,11 @@ can be layered on top of the same data model later without a rework.
 
 **What's deliberately out of scope for this pass:** text overlays and
 transitions (only `clip`/`audio` item types exist so far — the schema's
-`type` field is ready to extend), real playback/preview (items reference
-`mediaAssetId` but nothing renders video/canvas yet), and real source
-duration — `MediaAsset.durationMs` is never populated (no ffprobe
-integration yet), so new clips get a placeholder duration (3s for images,
-5s for video/audio) with no validation that trims stay within the actual
-source length. That validation arrives with the render pipeline.
+`type` field is ready to extend), and real source duration —
+`MediaAsset.durationMs` is never populated (no ffprobe integration yet),
+so new clips get a placeholder duration (3s for images, 5s for video/audio)
+with no validation that trims stay within the actual source length. That
+validation arrives with the render pipeline.
 
 Verified end to end against live Postgres, including the actual JSON
 payload after each operation: added/reordered/renamed/resized scenes;
@@ -257,6 +256,49 @@ refused; split a clip at the playhead and confirmed the two halves'
 start-time field; deleted a clip (and confirmed the confirm-guard actually
 blocks an unconfirmed delete); reloaded the page after every step and got
 back the exact same state each time.
+
+## Preview player
+
+`scene-preview.tsx` renders what's actually on the timeline — a `<canvas>`
+above the track list with Play/Pause and a time readout, sharing the same
+`playheadMs` state as the ruler (so scrubbing the ruler moves the preview
+and vice versa). It mirrors the renderer's own scope: the first video track
+with clips (image or video) plus the first audio track with clips, same as
+what `POST /exports` will actually render — what you preview is what you
+get.
+
+Video/image/audio elements are created lazily (one per `MediaAsset`, kept
+off-DOM, `drawImage`'d onto the canvas each frame) rather than one element
+per timeline item, so scrubbing back onto a clip reuses its already-loaded
+element instead of re-fetching. Playback drives the active element's
+native `play()` (so decoding/audio timing stays smooth) and only reseeks
+on clip changes or when drift exceeds 300ms, rather than reseeking every
+animation frame — reseeking every frame is the naive approach and it
+stutters badly on compressed video. Paused scrubbing seeks directly and
+redraws once the browser fires `seeked`/`loadeddata` — necessary because
+the very first `drawImage` after creating an element usually fires before
+it has a decoded frame at all, drawing nothing.
+
+`Transform` (x/y/scale/rotation/opacity, already in the schema, previously
+unused) is applied on the canvas the same way it will need to be applied
+in the render pipeline eventually: fit-contain into the frame, then the
+clip's own scale/offset/rotation/opacity on top.
+
+**Known limitation:** video/image elements are loaded from MinIO's signed
+URLs, a different origin than the web app, and MinIO doesn't send CORS
+headers — so the canvas is "tainted" after the first `drawImage`
+(`getImageData`/`toDataURL` throw `SecurityError`). Display-only playback
+is unaffected; anything that needs pixel readback (e.g. generating a
+thumbnail from the canvas) will need CORS headers added to the MinIO
+bucket policy first.
+
+Verified live: uploaded a real synthetic clip, placed it on a video track,
+confirmed the canvas actually painted its color (not just a black frame —
+caught and fixed a real bug this way, see the "Known limitation" note's
+sibling fix above about `seeked`/`loadeddata`), pressed Play and watched
+the readout and the ruler's playhead advance in lockstep, confirmed
+playback auto-stops at exactly the scene's end, and confirmed clicking the
+ruler while paused scrubs the canvas to the correct frame.
 
 ## Rendering & export
 

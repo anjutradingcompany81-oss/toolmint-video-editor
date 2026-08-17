@@ -20,6 +20,7 @@ import SaveIndicator from "@/components/save-indicator";
 import MediaLibrary from "./media-library";
 import TimelineItemBlock from "./timeline-item-block";
 import ExportPanel from "./export-panel";
+import ScenePreview from "./scene-preview";
 
 const PX_PER_SECOND = 60;
 const PLAYHEAD_SNAP_MS = 50;
@@ -265,7 +266,18 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
         </div>
 
         <div className="min-w-0">
-          <div className="overflow-x-auto rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3">
+          <ScenePreview
+            scene={scene}
+            media={media}
+            aspectRatio={project.aspectRatio}
+            customWidth={project.customWidth}
+            customHeight={project.customHeight}
+            endMs={endMs}
+            playheadMs={playheadMs}
+            onPlayheadChange={setPlayheadMs}
+          />
+
+          <div className="mt-4 overflow-x-auto rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3">
             <div style={{ width: Math.max(msToPx(endMs) + 40, 400) + LABEL_COL_PX }}>
               <div className="flex gap-2">
                 <div className="w-32 shrink-0" />
