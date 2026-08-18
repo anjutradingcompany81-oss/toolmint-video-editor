@@ -1,0 +1,141 @@
+# Production stack for ToolMint, fully isolated from anything else already
+# running on this VPS: its own compose project name (prefixes every
+# container/volume/network name below), its own Docker network, its own
+# named volumes, and its own containers — nothing here touches another
+# app's database, files, or ports.
+#
+# Run from the repo root:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+#
+# Postgres and Redis are deliberately NOT published to the host at all —
+# only the api/web/minio containers, which nginx needs to reach, are, and
+# only on 127.0.0.1 (never a public interface — nginx is the only public
+# entry point; see deploy/nginx/toolmint.conf).
+
+name: toolmint
+
+networks:
+  toolmint_net:
+    name: toolmint_net
+
+volumes:
+  toolmint_postgres_data:
+    name: toolmint_postgres_data
+  toolmint_redis_data:
+    name: toolmint_redis_data
+  toolmint_minio_data:
+    name: toolmint_minio_data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: toolmint-postgres
+    restart: unless-stopped
+    networks: [toolmint_net]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - toolmint_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: toolmint-redis
+    restart: unless-stopped
+    networks: [toolmint_net]
+    volumes:
+      - toolmint_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: toolmint-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    networks: [toolmint_net]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+    ports:
+      # S3 API only — nginx proxies media.toolmint.co.in here. The admin
+      # console (9001) isn't published; use `docker compose exec` or an SSH
+      # tunnel (`ssh -L 9001:127.0.0.1:9101 you@vps`) if you need it.
+      - "127.0.0.1:9100:9000"
+    volumes:
+      - toolmint_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: toolmint-minio-init
+    networks: [toolmint_net]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY} &&
+      mc mb -p local/${S3_BUCKET}
+      "
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: toolmint-api
+    restart: unless-stopped
+    networks: [toolmint_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      # Public URL, not the internal "minio:9000" hostname — this gets
+      # embedded in presigned URLs the browser fetches directly, so it has
+      # to be something the browser (not just this container) can reach.
+      S3_ENDPOINT: https://media.toolmint.co.in
+      S3_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_FORCE_PATH_STYLE: "true"
+      WEB_APP_URL: https://www.toolmint.co.in
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 30d
+    ports:
+      - "127.0.0.1:4100:4000"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://api.toolmint.co.in
+    container_name: toolmint-web
+    restart: unless-stopped
+    networks: [toolmint_net]
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:3100:3000"
