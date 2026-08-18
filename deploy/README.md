@@ -118,8 +118,13 @@ HTTP→HTTPS redirect — nothing to do manually here beyond running it.
 ## 7. Run the database migration
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml exec api npx prisma migrate deploy
+docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod exec -w /app/apps/api api npx prisma migrate deploy
 ```
+
+(The `-w /app/apps/api` matters — npm workspaces places the `prisma` CLI
+binary under `apps/api/node_modules/.bin`, not the container's default
+`/app` working directory, so `npx` can't find it without being pointed
+there explicitly.)
 
 (Only needed once per schema change going forward — this first run creates
 every table.)
@@ -148,8 +153,9 @@ git pull
 docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
 ```
 
-Add `docker compose -f deploy/docker-compose.prod.yml exec api npx prisma
-migrate deploy` afterward if the change included a schema migration.
+Add `docker compose -f deploy/docker-compose.prod.yml --env-file
+deploy/.env.prod exec -w /app/apps/api api npx prisma migrate deploy`
+afterward if the change included a schema migration.
 
 ## Continuous deployment (optional)
 
