@@ -89,7 +89,8 @@ export default function ExportPanel({ projectId, sceneId }: ExportPanelProps) {
       {error && <p className="text-red-400">{error}</p>}
 
       <p className="text-[var(--tm-text-dim)]">
-        Renders the video track (and audio track, if any) — clips must be back-to-back with no gaps or overlaps.
+        Renders the video track (and audio track, if any) — clips must be back-to-back, with no gaps. Overlapping two
+        clips creates a transition (set its style on the incoming clip).
       </p>
 
       {jobs.length > 0 && (
