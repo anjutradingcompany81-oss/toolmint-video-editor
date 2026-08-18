@@ -10,16 +10,17 @@ alongside — not merged into — your existing site configs.
 
 ## 0. Before you start
 
-Confirm the ports this stack wants are actually free (`127.0.0.1:3200`,
+Confirm the ports this stack wants are actually free (`127.0.0.1:38173`,
 `127.0.0.1:4100`, `127.0.0.1:9100` — all localhost-only, so this only
-matters if something else on the box already grabbed them). This check can
-still say "free" and then lose the race to something started later — that's
-exactly what happened during development, where an unrelated site's own
-`next-server` grabbed 3100 first, so treat a bind failure at `up` time as
-real even if this said clear earlier:
+matters if something else on the box already grabbed them). During
+development this box turned out to have several other sites' `next-server`
+processes already bound to low, guessable ports (3100, then 3200) — hence
+the odd-looking high port here, chosen only after confirming it was clear.
+Treat a bind failure at `up` time as real even if this check said clear
+earlier — it can still lose a race to something started later:
 
 ```bash
-sudo ss -tlnp | grep -E ':3200|:4100|:9100'
+sudo ss -tlnp | grep -E ':38173|:4100|:9100'
 ```
 
 If any of those print a result, edit the three port lines in
