@@ -37,7 +37,8 @@
     "passport-jwt": "latest",
     "reflect-metadata": "latest",
     "rxjs": "latest",
-    "zod": "latest"
+    "zod": "latest",
+    "prisma": "^6"
   },
   "devDependencies": {
     "@nestjs/cli": "latest",
@@ -53,7 +54,6 @@
     "@typescript-eslint/parser": "latest",
     "eslint": "latest",
     "jest": "^29",
-    "prisma": "^6",
     "source-map-support": "latest",
     "ts-jest": "^29",
     "ts-loader": "latest",

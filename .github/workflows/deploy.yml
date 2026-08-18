@@ -31,5 +31,5 @@ jobs:
             cd /opt/toolmint
             git pull
             docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
-            docker compose -f deploy/docker-compose.prod.yml exec -T api npx prisma migrate deploy
+            docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod exec -T api npx prisma migrate deploy
             docker image prune -f
