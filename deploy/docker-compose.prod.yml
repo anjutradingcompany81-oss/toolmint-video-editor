@@ -138,4 +138,6 @@ services:
     networks: [toolmint_net]
     depends_on: [api]
     ports:
-      - "127.0.0.1:3100:3000"
+      # 3100 collided with an unrelated next-server already running on this
+      # VPS for another site — moved to 3200 instead of touching that.
+      - "127.0.0.1:3200:3000"
