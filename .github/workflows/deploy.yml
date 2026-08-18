@@ -1,0 +1,28 @@
+name: Deploy to VPS
+
+# Runs on every push to main — pulls the new code on the VPS and rebuilds
+# only the containers that changed. Requires three repo secrets (Settings ->
+# Secrets and variables -> Actions): VPS_HOST, VPS_USER, VPS_SSH_KEY.
+# See deploy/README.md "Continuous deployment" section for one-time setup.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/toolmint
+            git pull
+            docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+            docker compose -f deploy/docker-compose.prod.yml exec -T api npx prisma migrate deploy
+            docker image prune -f

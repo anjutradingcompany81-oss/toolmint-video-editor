@@ -150,3 +150,39 @@ docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up 
 
 Add `docker compose -f deploy/docker-compose.prod.yml exec api npx prisma
 migrate deploy` afterward if the change included a schema migration.
+
+## Continuous deployment (optional)
+
+`.github/workflows/deploy.yml` runs the update steps above automatically on
+every push to `main` — no manual VPS commands after that point. One-time
+setup, done once on the VPS and once on GitHub:
+
+**On the VPS**, generate a dedicated key pair just for this (don't reuse
+your personal one):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/toolmint_deploy -N "" -C "github-actions-deploy"
+cat ~/.ssh/toolmint_deploy.pub >> ~/.ssh/authorized_keys
+cat ~/.ssh/toolmint_deploy
+```
+
+That last command prints the *private* key. Copy the whole block, including
+the `-----BEGIN...` and `-----END...` lines.
+
+**On GitHub**, go to the repo's Settings -> Secrets and variables -> Actions
+-> "New repository secret", and add three secrets:
+
+| Name | Value |
+|---|---|
+| `VPS_HOST` | the VPS's IP address |
+| `VPS_USER` | `root` (or whichever user owns `/opt/toolmint`) |
+| `VPS_SSH_KEY` | the private key printed above, pasted in full |
+
+Paste the private key directly from the VPS terminal into GitHub's secret
+field — it's encrypted at rest and never exposed in logs. It doesn't need
+to pass through anywhere else, including any AI assistant helping with
+setup, since GitHub Actions is the only thing that ever uses it.
+
+From then on, every push to `main` (including one made by Claude on your
+behalf) redeploys automatically — check progress under the repo's
+"Actions" tab.
