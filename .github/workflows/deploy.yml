@@ -9,6 +9,13 @@ on:
   push:
     branches: [main]
 
+# Two quick pushes shouldn't run two deploys in parallel against the same
+# VPS — queue the second instead of letting them race each other's
+# `docker compose up --build`.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
