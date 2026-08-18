@@ -24,7 +24,9 @@ async function bootstrap() {
     }),
   );
 
-  const port = config.get<number>("API_PORT", 4000);
+  // Most PaaS hosts (Railway, Render, ...) inject PORT and require the app to
+  // bind to it; API_PORT is what local dev / .env.example use instead.
+  const port = config.get<number>("PORT") ?? config.get<number>("API_PORT", 4000);
   await app.listen(port);
   console.log(`ToolMint API listening on http://localhost:${port}`);
 }

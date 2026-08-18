@@ -485,3 +485,83 @@ Postgres, and MinIO.
 
 See `apps/api/.env.example` and `apps/web/.env.example`. Never commit `.env` or
 `.env.local` — both are gitignored.
+
+## Deploying to production
+
+Target stack: **Vercel** (web), **Railway** (API + its BullMQ render worker,
+in-process — see "Rendering & export"), **Neon** (Postgres), **Railway Redis**
+(not Upstash — BullMQ needs blocking commands some serverless-Redis tiers
+restrict; Railway's Redis is co-located with the API and has no such
+caveat), **Cloudflare R2** (object storage, S3-compatible, no egress fees).
+Nothing in the code is tied to these specific providers — `StorageService`
+talks to whatever's behind `S3_ENDPOINT`, and Postgres/Redis are just
+connection strings — swap any of them for AWS/GCP/a VPS without code changes.
+
+Domain layout: `www.toolmint.co.in` (web, on Vercel) and
+`api.toolmint.co.in` (API, on Railway) — **the subdomain split matters**,
+not just naming: the refresh-token cookie is `SameSite=Lax`, which is sent
+on cross-*origin* fetches as long as they're same-*site* (same registrable
+domain). `www.` and `api.` under `toolmint.co.in` qualify; a raw
+`*.up.railway.app` API URL would not, and login would silently fail to
+persist. If you don't want a custom API subdomain, change the cookie's
+`sameSite` to `"none"` in `auth.controller.ts` instead (`secure: true` is
+already conditional on `NODE_ENV=production`, which `none` requires).
+
+**1. Neon (Postgres)** — create a project, copy its pooled connection
+string into `DATABASE_URL` (append `?sslmode=require` if Neon doesn't add
+it already).
+
+**2. Cloudflare R2 (storage)** — create a bucket, an API token scoped to
+it, and note the account's S3 endpoint
+(`https://<account_id>.r2.cloudflarestorage.com`). Maps directly to
+`S3_ENDPOINT` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` /
+`S3_BUCKET`; set `S3_REGION=auto` and `S3_FORCE_PATH_STYLE=true`.
+
+**3. Railway (API + Redis)**
+- New project → add a **Redis** service (gives you `REDIS_URL` automatically
+  — copy it into the API service's env instead of wiring a reference, simpler
+  to reason about).
+- Add a service from this GitHub repo, **root directory `apps/api`**.
+  Railway auto-detects the Node build; `postinstall` runs `prisma generate`
+  automatically as part of `npm install`, and `npm run build` runs `nest
+  build`. Start command: `npm run start`.
+- Env vars: `NODE_ENV=production`, `DATABASE_URL` (from Neon),
+  `REDIS_URL` (from Railway's Redis service), the `S3_*` vars (from R2),
+  `WEB_APP_URL=https://www.toolmint.co.in`, a freshly generated
+  `JWT_ACCESS_SECRET` (`openssl rand -base64 48` — **not** the dev
+  placeholder), `JWT_ACCESS_TTL=15m`, `JWT_REFRESH_TTL=30d`. Leave `PORT`
+  unset — Railway injects it, and `main.ts` already prefers it over
+  `API_PORT`.
+- Before (or right after) the first deploy, run the migration against the
+  Neon database once: `DATABASE_URL=<neon-connection-string> npm run
+  prisma:deploy` (from `apps/api`, locally or via Railway's shell) — **not**
+  `prisma:migrate`, which is the interactive dev command and will prompt.
+- Add the custom domain `api.toolmint.co.in` in Railway's service settings,
+  and the CNAME it gives you at your DNS registrar.
+
+**4. Vercel (web)**
+- Import the repo, set the project's **Root Directory** to `apps/web`
+  (Vercel's standard flow for an npm-workspaces monorepo — it still runs
+  `npm install` at the repo root, then builds within that directory).
+- Env var: `NEXT_PUBLIC_API_URL=https://api.toolmint.co.in`. This is
+  inlined at *build* time (it's `NEXT_PUBLIC_`), so set it before the first
+  deploy, not after.
+- Add `www.toolmint.co.in` as the project's domain; add `toolmint.co.in`
+  (apex) too and let Vercel redirect it to `www` (its domain settings do
+  this without extra config) so both resolve.
+- At your DNS registrar: a `CNAME` (or Vercel's given `A`/`ALIAS` record)
+  for `www` → Vercel, and whatever apex-domain record Vercel's domain
+  panel asks for.
+
+**5. Before real users touch it:** `MailService`'s only implementation
+today logs verification/reset emails to the console (see "Auth" above) —
+those emails go nowhere a user can see them. Implement a real provider
+(Postmark/Resend/SES — anything behind the same `MailService` interface)
+before launch, or password reset and email verification will silently not
+work for anyone.
+
+**Verifying the deploy:** `https://api.toolmint.co.in/health` should return
+`{"status":"ok",...}` (confirms Postgres connectivity); then register a
+real account at `https://www.toolmint.co.in`, upload a real clip, and
+export a scene — a `FAILED` export with a real error message beats a
+silent gap, so check the export panel, not just that the page loads.
