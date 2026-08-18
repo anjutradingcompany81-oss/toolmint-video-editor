@@ -11,12 +11,15 @@ import {
   newTextItem,
   newTimelineItem,
   newTrack,
+  overlapWithPreviousMs,
   trackAcceptsMediaKind,
+  TRANSITION_TYPE_LABELS,
   type MediaTimelineItem,
   type Scene,
   type TextTimelineItem,
   type Track,
   type TrackType,
+  type TransitionType,
 } from "@/lib/composition-api";
 import SaveIndicator from "@/components/save-indicator";
 import MediaLibrary from "./media-library";
@@ -128,6 +131,13 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     }));
   }
 
+  function updateTransitionIn(trackId: string, itemId: string, transitionIn: TransitionType) {
+    updateTrack(trackId, (t) => ({
+      ...t,
+      items: t.items.map((i) => (i.id === itemId && i.type !== "text" ? { ...i, transitionIn } : i)),
+    }));
+  }
+
   function deleteItem(trackId: string, itemId: string) {
     // Matches the confirm-before-delete pattern used for projects/scenes/media
     // elsewhere in this app — there's no undo yet, so this is the only
@@ -189,6 +199,13 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
   const endMs = sceneEndMs(scene);
   const selectedItem = selected ? scene.tracks.find((t) => t.id === selected.trackId)?.items.find((i) => i.id === selected.itemId) : undefined;
   const selectedTrack = selected ? scene.tracks.find((t) => t.id === selected.trackId) : undefined;
+  const selectedItemOverlapMs =
+    selectedTrack && selectedItem
+      ? overlapWithPreviousMs(
+          [...selectedTrack.items].sort((a, b) => a.startMs - b.startMs),
+          [...selectedTrack.items].sort((a, b) => a.startMs - b.startMs).findIndex((i) => i.id === selectedItem.id),
+        )
+      : 0;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -312,6 +329,29 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                   }}
                 />
               </label>
+              {selectedItem.type !== "text" && (
+                <label className="flex items-center justify-between gap-2">
+                  Transition in
+                  <select
+                    className="rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1"
+                    value={selectedItem.transitionIn}
+                    onChange={(e) => updateTransitionIn(selectedTrack.id, selectedItem.id, e.target.value as TransitionType)}
+                  >
+                    {Object.entries(TRANSITION_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {selectedItem.type !== "text" && (
+                <p className="text-[11px] text-[var(--tm-text-dim)]">
+                  {selectedItemOverlapMs > 0
+                    ? `Crossfades with the previous clip over the ${(selectedItemOverlapMs / 1000).toFixed(1)}s they overlap.`
+                    : "No transition — this clip doesn't overlap the previous one. Set Start (s) earlier to overlap it and create a crossfade."}
+                </p>
+              )}
               {selectedItem.type !== "text" && (
                 <button
                   onClick={() => splitAtPlayhead(selectedTrack.id, selectedItem)}

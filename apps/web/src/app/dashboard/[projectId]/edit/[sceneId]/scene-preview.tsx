@@ -31,8 +31,25 @@ function isActive(item: { startMs: number; durationMs: number }, ms: number): bo
   return ms >= item.startMs && ms < item.startMs + item.durationMs;
 }
 
-function activeMediaItem(track: Track | undefined, ms: number): MediaTimelineItem | undefined {
-  return track?.items.find((i): i is MediaTimelineItem => i.type !== "text" && isActive(i, ms));
+// Usually 0-1 items; 2 during a transition's overlap window. A third
+// simultaneously-active item would mean two transitions overlapping each
+// other (very short clips with back-to-back transitions) — not supported,
+// so it's truncated rather than handled incorrectly.
+function activeMediaItems(track: Track | undefined, ms: number): MediaTimelineItem[] {
+  if (!track) return [];
+  return track.items
+    .filter((i): i is MediaTimelineItem => i.type !== "text" && isActive(i, ms))
+    .sort((a, b) => a.startMs - b.startMs)
+    .slice(0, 2);
+}
+
+// 0 at the start of the overlap (outgoing fully visible/audible), 1 at the
+// end (incoming fully visible/audible).
+function transitionProgress(outgoing: MediaTimelineItem, incoming: MediaTimelineItem, ms: number): number {
+  const overlapStart = incoming.startMs;
+  const overlapEnd = outgoing.startMs + outgoing.durationMs;
+  const span = Math.max(1, overlapEnd - overlapStart);
+  return Math.min(1, Math.max(0, (ms - overlapStart) / span));
 }
 
 // Every text track's active items, not just the first — unlike the single
@@ -52,6 +69,14 @@ function formatTime(ms: number): string {
   return `${minutes}:${seconds}`;
 }
 
+interface VideoLayer {
+  el: HTMLVideoElement | HTMLImageElement;
+  naturalW: number;
+  naturalH: number;
+  transform: Transform;
+  alpha: number;
+}
+
 interface ScenePreviewProps {
   scene: Scene;
   media: MediaAsset[];
@@ -68,8 +93,14 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
   const videoElsRef = useRef(new Map<string, HTMLVideoElement>());
   const imageElsRef = useRef(new Map<string, HTMLImageElement>());
   const audioElsRef = useRef(new Map<string, HTMLAudioElement>());
-  const activeVideoIdRef = useRef<string | null>(null);
-  const activeAudioIdRef = useRef<string | null>(null);
+  // Keyed by timeline item id (which of possibly two simultaneously-active
+  // items is "already playing", for the play-vs-reseek decision below) —
+  // the underlying <video>/<audio> elements themselves are still keyed by
+  // asset id, so two simultaneously-active items that happen to share the
+  // same source asset will fight over one element. Not handled — a rare
+  // edge case (transitioning a clip into another copy of itself).
+  const activeVideoItemIdsRef = useRef(new Set<string>());
+  const activeAudioItemIdsRef = useRef(new Set<string>());
   const playingRef = useRef(false);
   const rafRef = useRef<number | undefined>(undefined);
   const anchorRef = useRef({ wallStartMs: 0, playheadStartMs: 0 });
@@ -131,21 +162,33 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
 
   function pauseAllVideo() {
     videoElsRef.current.forEach((el) => el.pause());
-    activeVideoIdRef.current = null;
+    activeVideoItemIdsRef.current = new Set();
   }
 
   function pauseAllAudio() {
     audioElsRef.current.forEach((el) => el.pause());
-    activeAudioIdRef.current = null;
+    activeAudioItemIdsRef.current = new Set();
   }
 
-  function drawFrame(
-    el: HTMLVideoElement | HTMLImageElement | null,
-    naturalW: number,
-    naturalH: number,
-    transform: Transform | undefined,
-    textItems: TextTimelineItem[],
-  ) {
+  // Drives one video/audio element's seek+play state, shared by the video
+  // and audio branches of render(). `wasActive` distinguishes "already
+  // playing, only correct drift" from "just became active, do a hard seek".
+  function driveElement(el: HTMLVideoElement | HTMLAudioElement, targetTimeS: number, wasActive: boolean) {
+    if (playingRef.current) {
+      if (!wasActive) {
+        el.currentTime = targetTimeS;
+        el.play().catch(() => undefined);
+      } else if (Math.abs(el.currentTime - targetTimeS) > DRIFT_CORRECTION_S) {
+        el.currentTime = targetTimeS;
+      }
+    } else {
+      el.pause();
+      // Guard against a no-op reassignment re-triggering 'seeked' in a loop.
+      if (Math.abs(el.currentTime - targetTimeS) > 0.01) el.currentTime = targetTimeS;
+    }
+  }
+
+  function drawFrame(layers: VideoLayer[], textItems: TextTimelineItem[]) {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
@@ -153,16 +196,20 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (el && naturalW && naturalH && transform) {
-      const fitScale = Math.min(canvas.width / naturalW, canvas.height / naturalH);
-      const drawW = naturalW * fitScale * transform.scale;
-      const drawH = naturalH * fitScale * transform.scale;
+    // Layers are already in outgoing-then-incoming order — compositing the
+    // incoming layer over the outgoing one with globalAlpha=t produces the
+    // same result as a true linear crossfade for opaque video frames.
+    for (const layer of layers) {
+      if (!layer.naturalW || !layer.naturalH) continue;
+      const fitScale = Math.min(canvas.width / layer.naturalW, canvas.height / layer.naturalH);
+      const drawW = layer.naturalW * fitScale * layer.transform.scale;
+      const drawH = layer.naturalH * fitScale * layer.transform.scale;
 
       ctx.save();
-      ctx.globalAlpha = transform.opacity;
-      ctx.translate(canvas.width / 2 + transform.x, canvas.height / 2 + transform.y);
-      ctx.rotate((transform.rotation * Math.PI) / 180);
-      ctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.globalAlpha = layer.transform.opacity * layer.alpha;
+      ctx.translate(canvas.width / 2 + layer.transform.x, canvas.height / 2 + layer.transform.y);
+      ctx.rotate((layer.transform.rotation * Math.PI) / 180);
+      ctx.drawImage(layer.el, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
     }
 
@@ -187,72 +234,77 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     const currentMediaById = mediaByIdRef.current;
     const videoTrack = currentScene.tracks.find((t) => t.type === "video" && t.items.length > 0);
     const audioTrack = currentScene.tracks.find((t) => t.type === "audio" && t.items.length > 0);
-    const vItem = activeMediaItem(videoTrack, ms);
-    const aItem = activeMediaItem(audioTrack, ms);
+    const videoItems = activeMediaItems(videoTrack, ms);
+    const audioItems = activeMediaItems(audioTrack, ms);
     const textItems = activeTextItems(currentScene, ms);
 
-    let drawEl: HTMLVideoElement | HTMLImageElement | null = null;
-    let naturalW = 0;
-    let naturalH = 0;
+    const videoLayers: VideoLayer[] = [];
+    const activeVideoAssetIds = new Set<string>();
 
-    const vAsset = vItem ? currentMediaById.get(vItem.mediaAssetId) : undefined;
-    if (vItem && vAsset?.kind === "VIDEO" && vAsset.previewUrl) {
-      const el = getVideoEl(vAsset);
-      const targetTime = (ms - vItem.startMs + vItem.trimInMs) / 1000;
-      if (playingRef.current) {
-        if (activeVideoIdRef.current !== vItem.id) {
-          videoElsRef.current.forEach((v, id) => {
-            if (id !== vAsset.id) v.pause();
-          });
-          el.currentTime = targetTime;
-          el.play().catch(() => undefined);
-          activeVideoIdRef.current = vItem.id;
-        } else if (Math.abs(el.currentTime - targetTime) > DRIFT_CORRECTION_S) {
-          el.currentTime = targetTime;
+    videoItems.forEach((item, idx) => {
+      const asset = currentMediaById.get(item.mediaAssetId);
+      if (!asset?.previewUrl) return;
+
+      let alpha = 1;
+      if (videoItems.length === 2) {
+        const [outgoing, incoming] = videoItems;
+        const t = transitionProgress(outgoing, incoming, ms);
+        if (incoming.transitionIn === "fade") {
+          alpha = idx === 0 ? 1 : t;
+        } else {
+          // Non-fade styles (wipe/slide) aren't blended in preview —
+          // approximated as a hard cut at the overlap's midpoint. Export
+          // always renders the real transition regardless of style; see
+          // the README's "Transitions" section.
+          const showIncoming = t >= 0.5;
+          if ((idx === 0 && showIncoming) || (idx === 1 && !showIncoming)) return;
         }
-      } else {
-        el.pause();
-        // Guard against a no-op reassignment re-triggering 'seeked' in a loop.
-        if (Math.abs(el.currentTime - targetTime) > 0.01) el.currentTime = targetTime;
       }
-      drawEl = el;
-      naturalW = el.videoWidth;
-      naturalH = el.videoHeight;
-    } else if (vItem && vAsset?.kind === "IMAGE" && vAsset.previewUrl) {
-      pauseAllVideo();
-      const el = getImageEl(vAsset);
-      drawEl = el;
-      naturalW = el.naturalWidth;
-      naturalH = el.naturalHeight;
-    } else {
-      pauseAllVideo();
-    }
 
-    const aAsset = aItem ? currentMediaById.get(aItem.mediaAssetId) : undefined;
-    if (aItem && aAsset?.kind === "AUDIO" && aAsset.previewUrl) {
-      const el = getAudioEl(aAsset);
+      if (asset.kind === "VIDEO") {
+        const el = getVideoEl(asset);
+        activeVideoAssetIds.add(asset.id);
+        const targetTime = (ms - item.startMs + item.trimInMs) / 1000;
+        driveElement(el, targetTime, activeVideoItemIdsRef.current.has(item.id));
+        videoLayers.push({ el, naturalW: el.videoWidth, naturalH: el.videoHeight, transform: item.transform, alpha });
+      } else if (asset.kind === "IMAGE") {
+        const el = getImageEl(asset);
+        videoLayers.push({ el, naturalW: el.naturalWidth, naturalH: el.naturalHeight, transform: item.transform, alpha });
+      }
+    });
+
+    videoElsRef.current.forEach((el, assetId) => {
+      if (!activeVideoAssetIds.has(assetId)) el.pause();
+    });
+    activeVideoItemIdsRef.current = new Set(videoItems.map((i) => i.id));
+
+    const activeAudioAssetIds = new Set<string>();
+    audioItems.forEach((item, idx) => {
+      const asset = currentMediaById.get(item.mediaAssetId);
+      if (asset?.kind !== "AUDIO" || !asset.previewUrl) return;
+      const el = getAudioEl(asset);
+      activeAudioAssetIds.add(asset.id);
       el.muted = audioTrack?.muted ?? false;
-      const targetTime = (ms - aItem.startMs + aItem.trimInMs) / 1000;
-      if (playingRef.current) {
-        if (activeAudioIdRef.current !== aItem.id) {
-          audioElsRef.current.forEach((a, id) => {
-            if (id !== aAsset.id) a.pause();
-          });
-          el.currentTime = targetTime;
-          el.play().catch(() => undefined);
-          activeAudioIdRef.current = aItem.id;
-        } else if (Math.abs(el.currentTime - targetTime) > DRIFT_CORRECTION_S) {
-          el.currentTime = targetTime;
-        }
-      } else {
-        el.pause();
-        el.currentTime = targetTime;
-      }
-    } else {
-      pauseAllAudio();
-    }
 
-    drawFrame(drawEl, naturalW, naturalH, vItem?.transform, textItems);
+      // A genuine volume crossfade (not just an approximation) — audio
+      // elements support setting .volume directly, no Web Audio API needed.
+      let volume = 1;
+      if (audioItems.length === 2) {
+        const t = transitionProgress(audioItems[0], audioItems[1], ms);
+        volume = idx === 0 ? 1 - t : t;
+      }
+      el.volume = volume;
+
+      const targetTime = (ms - item.startMs + item.trimInMs) / 1000;
+      driveElement(el, targetTime, activeAudioItemIdsRef.current.has(item.id));
+    });
+
+    audioElsRef.current.forEach((el, assetId) => {
+      if (!activeAudioAssetIds.has(assetId)) el.pause();
+    });
+    activeAudioItemIdsRef.current = new Set(audioItems.map((i) => i.id));
+
+    drawFrame(videoLayers, textItems);
   }
 
   function tick() {

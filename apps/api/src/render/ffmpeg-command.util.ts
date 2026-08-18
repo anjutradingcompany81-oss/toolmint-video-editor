@@ -47,9 +47,10 @@ export interface ContiguityItem {
   durationMs: number;
 }
 
-// Gaps (needs a filler track we don't build yet) and overlaps (needs
-// layering we don't build yet) are both out of scope for this render pass —
-// give the user a clear reason instead of silently producing wrong output.
+// Gaps (needs a filler track we don't build yet) are out of scope — give the
+// user a clear reason instead of silently producing wrong output. A bounded
+// overlap is no longer an error: it's a transition (see buildFfmpegArgs's
+// xfade/acrossfade chaining), as long as it doesn't consume an entire clip.
 export function checkContiguous(items: ContiguityItem[]): { ok: true } | { ok: false; reason: string } {
   if (items.length === 0) return { ok: false, reason: "The track has no clips." };
   const sorted = [...items].sort((a, b) => a.startMs - b.startMs);
@@ -61,24 +62,35 @@ export function checkContiguous(items: ContiguityItem[]): { ok: true } | { ok: f
     if (sorted[i].startMs > prevEnd) {
       return { ok: false, reason: `There's a gap on the timeline around ${(prevEnd / 1000).toFixed(1)}s — close it before exporting.` };
     }
-    if (sorted[i].startMs < prevEnd) {
-      return { ok: false, reason: `Clips overlap around ${(sorted[i].startMs / 1000).toFixed(1)}s — overlapping clips aren't supported yet.` };
+    const overlapMs = prevEnd - sorted[i].startMs;
+    if (overlapMs > 0 && (overlapMs >= sorted[i - 1].durationMs || overlapMs >= sorted[i].durationMs)) {
+      return {
+        ok: false,
+        reason: `The transition around ${(sorted[i].startMs / 1000).toFixed(1)}s is longer than one of the clips it's between — shorten it.`,
+      };
     }
   }
   return { ok: true };
 }
+
+export type TransitionType = "fade" | "wipeleft" | "wiperight" | "slideup";
 
 export interface VideoSegment {
   localPath: string;
   kind: "video" | "image";
   trimInMs: number;
   durationMs: number;
+  // How much this segment overlaps the previous one — 0 means a hard cut.
+  // Meaningless (ignored) on the first segment, which has no predecessor.
+  transitionInMs: number;
+  transitionType: TransitionType;
 }
 
 export interface AudioSegment {
   localPath: string;
   trimInMs: number;
   durationMs: number;
+  transitionInMs: number;
 }
 
 // content is pre-written to textFilePath (by the caller, which already does
@@ -142,17 +154,43 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
   }
 
   const filterParts: string[] = [];
-  const videoLabels: string[] = [];
+  // "vout" directly when there's only one segment (nothing to combine);
+  // otherwise each segment gets its own v0/v1/... label and a combining step
+  // below (plain concat, or an xfade chain when a transition is present)
+  // produces "vout".
+  const videoLabels = plan.video.map((_, i) => (plan.video.length === 1 ? "vout" : `v${i}`));
   plan.video.forEach((seg, i) => {
-    const label = `v${i}`;
     filterParts.push(
       `[${i}:v]trim=start=${sec(seg.trimInMs)}:duration=${sec(seg.durationMs)},setpts=PTS-STARTPTS,` +
         `scale=${plan.width}:${plan.height}:force_original_aspect_ratio=decrease,` +
-        `pad=${plan.width}:${plan.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${plan.fps}[${label}]`,
+        `pad=${plan.width}:${plan.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${plan.fps}[${videoLabels[i]}]`,
     );
-    videoLabels.push(`[${label}]`);
   });
-  filterParts.push(`${videoLabels.join("")}concat=n=${plan.video.length}:v=1:a=0[vout]`);
+
+  if (plan.video.length > 1) {
+    const hasTransitions = plan.video.slice(1).some((seg) => seg.transitionInMs > 0);
+    if (!hasTransitions) {
+      filterParts.push(`${videoLabels.map((l) => `[${l}]`).join("")}concat=n=${plan.video.length}:v=1:a=0[vout]`);
+    } else {
+      // xfade takes each clip's *full* individual duration and works out the
+      // overlap itself from `offset`/`duration` — chaining it means tracking
+      // the cumulative duration of the merged-so-far stream (which shrinks
+      // by each transition's length as it's applied) to compute the next
+      // offset, not just summing raw clip durations.
+      let chainLabel = videoLabels[0];
+      let cumulativeMs = plan.video[0].durationMs;
+      for (let i = 1; i < plan.video.length; i++) {
+        const seg = plan.video[i];
+        const outLabel = i === plan.video.length - 1 ? "vout" : `vxf${i}`;
+        const offsetMs = Math.max(0, cumulativeMs - seg.transitionInMs);
+        filterParts.push(
+          `[${chainLabel}][${videoLabels[i]}]xfade=transition=${seg.transitionType}:duration=${sec(seg.transitionInMs)}:offset=${sec(offsetMs)}[${outLabel}]`,
+        );
+        chainLabel = outLabel;
+        cumulativeMs = cumulativeMs + seg.durationMs - seg.transitionInMs;
+      }
+    }
+  }
 
   // Each overlay is its own drawtext link in the chain, independently gated
   // by `enable`, so overlapping text items (unlike video/audio clips) just
@@ -172,16 +210,30 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
     finalVideoLabel = outLabel;
   });
 
-  const audioLabels: string[] = [];
+  const audioLabels = plan.audio.map((_, i) => (plan.audio.length === 1 ? "aout" : `a${i}`));
   const audioInputOffset = plan.video.length;
   plan.audio.forEach((seg, i) => {
     const inputIndex = audioInputOffset + i;
-    const label = `a${i}`;
-    filterParts.push(`[${inputIndex}:a]atrim=start=${sec(seg.trimInMs)}:duration=${sec(seg.durationMs)},asetpts=PTS-STARTPTS[${label}]`);
-    audioLabels.push(`[${label}]`);
+    filterParts.push(`[${inputIndex}:a]atrim=start=${sec(seg.trimInMs)}:duration=${sec(seg.durationMs)},asetpts=PTS-STARTPTS[${audioLabels[i]}]`);
   });
-  if (plan.audio.length > 0) {
-    filterParts.push(`${audioLabels.join("")}concat=n=${plan.audio.length}:v=0:a=1[aout]`);
+
+  if (plan.audio.length > 1) {
+    const hasAudioTransitions = plan.audio.slice(1).some((seg) => seg.transitionInMs > 0);
+    if (!hasAudioTransitions) {
+      filterParts.push(`${audioLabels.map((l) => `[${l}]`).join("")}concat=n=${plan.audio.length}:v=0:a=1[aout]`);
+    } else {
+      // acrossfade needs no offset like xfade does — it always fades the
+      // tail of stream1 into the head of stream2 over `d` seconds, which is
+      // exactly right when chained: at each step, stream1's tail is the
+      // tail of whatever clip was most recently appended.
+      let chainLabel = audioLabels[0];
+      for (let i = 1; i < plan.audio.length; i++) {
+        const seg = plan.audio[i];
+        const outLabel = i === plan.audio.length - 1 ? "aout" : `axf${i}`;
+        filterParts.push(`[${chainLabel}][${audioLabels[i]}]acrossfade=d=${sec(seg.transitionInMs)}[${outLabel}]`);
+        chainLabel = outLabel;
+      }
+    }
   }
 
   args.push("-filter_complex", filterParts.join(";"));

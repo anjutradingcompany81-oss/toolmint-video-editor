@@ -3,15 +3,16 @@
 A browser-based, scene-first video editor: multi-track timeline, non-destructive
 editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
 
-**Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) underway.**
+**Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) complete.**
 Auth, project CRUD, media upload, and the dashboard are done. The storyboard
-editor, a first pass at the multi-track timeline (place/move/trim/split/
-delete clips), a first pass at rendering (export a scene to a real MP4), a
-real-time canvas preview player (play/pause/scrub what's actually on the
-timeline), and text overlays (added, styled, and burned into the actual
-export via FFmpeg's drawtext) are done. Not yet built: transitions. See the
-product/systems spec for the full plan (PRD, architecture, DB schema,
-timeline JSON format, rendering pipeline, cost/risk, phased plan).
+editor, the multi-track timeline (place/move/trim/split/delete clips),
+rendering (export a scene to a real MP4), a real-time canvas preview player
+(play/pause/scrub what's actually on the timeline), text overlays (added,
+styled, and burned into the export via FFmpeg's drawtext), and transitions
+(crossfade/wipe/slide between clips, both previewed and actually rendered
+via xfade/acrossfade) are done. See the product/systems spec for the full
+plan (PRD, architecture, DB schema, timeline JSON format, rendering
+pipeline, cost/risk, phased plan) and Phase 3+ scope.
 
 ## Stack
 
@@ -356,8 +357,9 @@ started alongside the API — a separate worker process is a scaling
 concern for later, not a correctness one now) picks it up, downloads the
 needed source files from object storage to a temp directory, builds an
 FFmpeg `filter_complex` graph, runs a real FFmpeg process (via
-`@ffmpeg-installer/ffmpeg` — a bundled static binary, no system install
-required), uploads the result back to object storage, and updates the job
+`ffmpeg-static` — a bundled binary, no system install required; see the
+note in "Transitions" below on why this isn't `@ffmpeg-installer/ffmpeg`
+anymore), uploads the result back to object storage, and updates the job
 to `COMPLETED` with a storage key (or `FAILED` with a message). Progress
 is coarse-grained (stage-based: 5/15/40/90/100), not frame-accurate.
 
@@ -368,19 +370,20 @@ video, so unlike clips it isn't limited to one track and doesn't need to
 be contiguous; see "Text overlays" above). Multiple video/audio tracks
 (which would need real layering/compositing, not built yet) are ignored
 beyond the first of each. Clips on the rendered video/audio track must be
-back-to-back with **no gaps and no overlaps** — the render is rejected up
-front with a specific, actionable message (`ffmpeg-command.util.ts`'s
-`checkContiguous`) rather than silently producing wrong output; filling
-gaps with black/silence and overlap layering are follow-up work, not this
-pass. Output resolution is derived from the project's aspect ratio and the
+back-to-back with **no gaps** — the render is rejected up front with a
+specific, actionable message (`ffmpeg-command.util.ts`'s
+`checkContiguous`) rather than silently producing wrong output; a bounded
+*overlap*, however, is no longer an error — see "Transitions" below.
+Output resolution is derived from the project's aspect ratio and the
 chosen 720p/1080p tier (`computeDimensions`); images are looped to their
 placed duration, videos are trimmed per clip, and everything is
 scaled/padded to a common frame size before concatenation so mixed source
 resolutions don't break the concat filter.
 
-Code, unit tests (dimension math, contiguity validation, filter-graph and
-text-overlay drawtext-chain construction, Windows path escaping — 19
-tests), typecheck, lint, and build are all verified.
+Code, unit tests (dimension math, contiguity validation, filter-graph,
+text-overlay drawtext-chain, and transition xfade/acrossfade-chain
+construction, Windows path escaping — 25 tests), typecheck, lint, and
+build are all verified.
 Verified end to end twice against live Postgres/Redis/MinIO: once via raw
 API calls (register, create a project, upload two real FFmpeg-generated
 clips, place them back-to-back on a track, export, poll to `COMPLETED`,
@@ -393,6 +396,61 @@ free along the way: an export attempted against a since-changed
 composition correctly failed with `This scene has no video clips to
 render` instead of producing wrong output. See "Running infra without
 Docker" below for what made this fiddly on this machine.
+
+## Transitions
+
+No new field stores a transition's *duration* — it's simply however far a
+clip's `startMs` overlaps the previous clip's end on the same track.
+`checkContiguous` (`ffmpeg-command.util.ts`) used to reject any overlap;
+now it only rejects a *gap*, or an overlap long enough to consume one of
+the two clips entirely (nothing left to actually show). The only new
+field is `transitionIn` on clip/audio items — a style (`fade`/`wipeleft`/
+`wiperight`/`slideup`), meaningless until an overlap exists. To create a
+transition in the timeline editor: place two clips back-to-back, then
+drag/type the second one's Start (s) earlier so it overlaps the first,
+and pick a style from the "Transition in" dropdown that appears on
+selection.
+
+**Rendered for real:** when a track has an overlap, the renderer chains
+`xfade` (video) / `acrossfade` (audio) instead of `concat`, computing each
+transition's `offset` from the running cumulative duration of the
+merged-so-far stream (each transition shrinks that running total by its
+own length — not just the sum of raw clip durations). No transition on a
+track falls back to the exact same `concat` path as before, so untouched
+projects render identically to pre-transition behavior.
+
+**A real blocker hit and fixed along the way:** `xfade` requires FFmpeg
+4.3+, but `@ffmpeg-installer/ffmpeg` (used since the render module was
+first built) turned out to be a frozen 2018 build with no newer version
+ever published — there was no "wait for an update" path. Rather than
+hand-roll a crossfade from 2018-era filters (`overlay`+`fade`+`tpad`
+timeline-shifting — doable, but fragile and a lot more filter-graph
+surface area to get subtly wrong), the render pipeline now runs on
+`ffmpeg-static` instead (FFmpeg 6.1, confirmed via `-filters` to actually
+have `xfade`/`acrossfade`), which changes nothing about the "bundled
+binary, no system install" property — it's a different package, not a
+system dependency.
+
+**Preview parity, and where it deliberately falls short:** the canvas
+preview blends two active clips during their overlap window — the
+incoming clip is drawn over the outgoing one with `globalAlpha` rising
+from 0 to 1, which is mathematically the same result as a linear
+crossfade for opaque video frames. Audio gets a real crossfade too
+(`HTMLAudioElement.volume` on both elements, no Web Audio API needed).
+**Known limitation:** only the `fade` style is actually blended in
+preview — `wipeleft`/`wiperight`/`slideup` are approximated as a hard cut
+at the overlap's midpoint, since reproducing FFmpeg's exact wipe/slide
+geometry in canvas wasn't worth the complexity for a preview (the export
+always renders the real style regardless).
+
+Verified live end to end: two real FFmpeg-generated clips (solid blue,
+solid green) placed with a 1s overlap and `transitionIn: "fade"`,
+confirmed the schema accepted the overlap (previously would have been
+rejected), exported the scene, downloaded the real output, and extracted
+frames across the transition window with `ffmpeg` — pure blue before the
+overlap, a genuine blue-green blend at the midpoint, pure green after,
+confirming an actual gradient rather than a hard cut. The same blend was
+also confirmed live in the browser preview by scrubbing into the overlap.
 
 ## Frontend
 

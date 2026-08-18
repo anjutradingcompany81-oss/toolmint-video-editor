@@ -18,10 +18,19 @@ const timelineItemBase = {
   transform: transformSchema.default({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }),
 };
 
+// The transition's *duration* is never stored explicitly — it's however
+// much this item's startMs overlaps the previous item's end on the same
+// track (see ffmpeg-command.util.ts's checkContiguous, which now allows a
+// bounded overlap instead of rejecting it). Only the *style* needs a field.
+// Meaningless with zero overlap (a plain hard cut), which is why it
+// defaults to "fade" rather than "none" — harmless until an overlap exists.
+export const transitionTypeSchema = z.enum(["fade", "wipeleft", "wiperight", "slideup"]);
+
 const mediaItemFields = {
   mediaAssetId: z.string().min(1),
   trimInMs: z.number().int().nonnegative().default(0),
   trimOutMs: z.number().int().nonnegative().default(0),
+  transitionIn: transitionTypeSchema.default("fade"),
 };
 
 const clipItemSchema = z.object({ ...timelineItemBase, type: z.literal("clip"), ...mediaItemFields });

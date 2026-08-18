@@ -54,12 +54,28 @@ describe("checkContiguous", () => {
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("gap") });
   });
 
-  it("rejects overlapping clips", () => {
+  it("accepts a bounded overlap as an implicit transition", () => {
     const result = checkContiguous([
       { startMs: 0, durationMs: 3000 },
       { startMs: 2000, durationMs: 2000 },
     ]);
-    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("overlap") });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects an overlap long enough to consume the first clip entirely", () => {
+    const result = checkContiguous([
+      { startMs: 0, durationMs: 2000 },
+      { startMs: 0, durationMs: 3000 },
+    ]);
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("longer than one of the clips") });
+  });
+
+  it("rejects an overlap long enough to consume the second clip entirely", () => {
+    const result = checkContiguous([
+      { startMs: 0, durationMs: 5000 },
+      { startMs: 4000, durationMs: 1000 },
+    ]);
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("longer than one of the clips") });
   });
 
   it("is order-independent — sorts before checking", () => {
@@ -78,7 +94,7 @@ describe("buildFfmpegArgs", () => {
 
   it("builds a single-clip, video-only command", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [],
       width: 1280,
@@ -93,12 +109,13 @@ describe("buildFfmpegArgs", () => {
     expect(args).not.toContain("[aout]");
     const filterIndex = args.indexOf("-filter_complex");
     expect(args[filterIndex + 1]).toContain("trim=start=0.000:duration=5.000");
-    expect(args[filterIndex + 1]).toContain("concat=n=1:v=1:a=0[vout]");
+    expect(args[filterIndex + 1]).toContain("[vout]");
+    expect(args[filterIndex + 1]).not.toContain("concat");
   });
 
   it("loops still images at the input level instead of trimming them", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000 }],
+      video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [],
       width: 1280,
@@ -110,13 +127,13 @@ describe("buildFfmpegArgs", () => {
     expect(args.slice(0, 6)).toEqual(["-loop", "1", "-t", "3.000", "-i", "photo.jpg"]);
   });
 
-  it("concatenates multiple clips in order and mixes in a matching audio chain", () => {
+  it("concatenates multiple hard-cut clips in order and mixes in a single audio track (no pointless concat for one segment)", () => {
     const args = buildFfmpegArgs({
       video: [
-        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 2000 },
-        { localPath: "b.mp4", kind: "video", trimInMs: 1000, durationMs: 3000 },
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 2000, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 1000, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
       ],
-      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 5000 }],
+      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 5000, transitionInMs: 0 }],
       text: [],
       width: 1920,
       height: 1080,
@@ -127,14 +144,99 @@ describe("buildFfmpegArgs", () => {
     const filterIndex = args.indexOf("-filter_complex");
     const filter = args[filterIndex + 1];
     expect(filter).toContain("concat=n=2:v=1:a=0[vout]");
-    expect(filter).toContain("concat=n=1:v=0:a=1[aout]");
+    expect(filter).toContain("[2:a]atrim=start=0.000:duration=5.000,asetpts=PTS-STARTPTS[aout]");
+    expect(filter).not.toContain("concat=n=1:v=0:a=1");
     expect(filter).toContain("[1:v]trim=start=1.000:duration=3.000");
     expect(args).toEqual(expect.arrayContaining(["-map", "[aout]", "-c:a", "aac", "-shortest"]));
   });
 
+  it("concatenates three hard-cut audio segments (no transitions)", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      audio: [
+        { localPath: "a.mp3", trimInMs: 0, durationMs: 2000, transitionInMs: 0 },
+        { localPath: "b.mp3", trimInMs: 0, durationMs: 2000, transitionInMs: 0 },
+      ],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).toContain("concat=n=2:v=0:a=1[aout]");
+  });
+
+  it("chains an xfade instead of concat when a video segment declares a transition", () => {
+    const args = buildFfmpegArgs({
+      video: [
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, transitionInMs: 1000, transitionType: "wipeleft" },
+      ],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).not.toContain("concat=n=2:v=1:a=0");
+    // offset = duration of clip A (3s) minus the transition (1s) = 2s.
+    expect(filter).toContain("[v0][v1]xfade=transition=wipeleft:duration=1.000:offset=2.000[vout]");
+    expect(args).toEqual(expect.arrayContaining(["-map", "[vout]"]));
+  });
+
+  it("chains xfade offsets cumulatively across three clips with two transitions", () => {
+    const args = buildFfmpegArgs({
+      video: [
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, transitionInMs: 1000, transitionType: "fade" },
+        { localPath: "c.mp4", kind: "video", trimInMs: 0, durationMs: 2000, transitionInMs: 500, transitionType: "fade" },
+      ],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    // Merged-so-far duration after the first xfade: 3000 + 4000 - 1000 = 6000ms.
+    // Second offset = 6000 - 500 = 5500ms.
+    expect(filter).toContain("[v0][v1]xfade=transition=fade:duration=1.000:offset=2.000[vxf1]");
+    expect(filter).toContain("[vxf1][v2]xfade=transition=fade:duration=0.500:offset=5.500[vout]");
+  });
+
+  it("chains an acrossfade instead of concat when an audio segment declares a transition", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      audio: [
+        { localPath: "a.mp3", trimInMs: 0, durationMs: 3000, transitionInMs: 0 },
+        { localPath: "b.mp3", trimInMs: 0, durationMs: 3000, transitionInMs: 800 },
+      ],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filterIndex = args.indexOf("-filter_complex");
+    const filter = args[filterIndex + 1];
+    expect(filter).not.toContain("concat=n=2:v=0:a=1");
+    expect(filter).toContain("[a0][a1]acrossfade=d=0.800[aout]");
+  });
+
   it("chains a drawtext filter for a text overlay and maps its output instead of [vout]", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [{ textFilePath: "text0.txt", startMs: 1000, durationMs: 2000, fontSize: 48, color: "#ffcc00", x: 10, y: -20, opacity: 0.5 }],
       width: 1280,
@@ -158,7 +260,7 @@ describe("buildFfmpegArgs", () => {
 
   it("chains multiple text overlays in order, each feeding the next", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [
         { textFilePath: "text0.txt", startMs: 0, durationMs: 2000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 },
@@ -180,7 +282,7 @@ describe("buildFfmpegArgs", () => {
 
   it("escapes a Windows-style font/text path so the colon and backslashes don't break filter parsing", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000 }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [{ textFilePath: "C:\\Users\\me\\AppData\\text0.txt", startMs: 0, durationMs: 1000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 }],
       width: 1280,

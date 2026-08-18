@@ -11,6 +11,15 @@ export interface Transform {
   opacity: number;
 }
 
+export type TransitionType = "fade" | "wipeleft" | "wiperight" | "slideup";
+
+export const TRANSITION_TYPE_LABELS: Record<TransitionType, string> = {
+  fade: "Fade",
+  wipeleft: "Wipe left",
+  wiperight: "Wipe right",
+  slideup: "Slide up",
+};
+
 export interface MediaTimelineItem {
   id: string;
   type: "clip" | "audio";
@@ -19,6 +28,11 @@ export interface MediaTimelineItem {
   durationMs: number;
   trimInMs: number;
   trimOutMs: number;
+  // Meaningful only when this item's startMs overlaps the previous item's
+  // end on the same track — the overlap amount *is* the transition duration
+  // (no separate field for it); this only picks the style. See the
+  // README's "Transitions" section.
+  transitionIn: TransitionType;
   transform: Transform;
 }
 
@@ -103,6 +117,7 @@ export function newTimelineItem(mediaAssetId: string, type: "clip" | "audio", st
     durationMs,
     trimInMs: 0,
     trimOutMs: 0,
+    transitionIn: "fade",
     transform: defaultTransform(),
   };
 }
@@ -133,4 +148,14 @@ export function trackAcceptsMediaKind(trackType: TrackType, mediaKind: string): 
 
 export function defaultClipDurationMs(mediaKind: string): number {
   return mediaKind === "IMAGE" ? 3000 : 5000;
+}
+
+// Mirrors the backend's overlapWithPrevious (render.processor.ts) — the
+// transition duration is never stored explicitly, it's derived from how far
+// an item's startMs reaches back into its predecessor's tail on the same
+// track. `items` must already be sorted by startMs.
+export function overlapWithPreviousMs(items: { startMs: number; durationMs: number }[], index: number): number {
+  if (index <= 0) return 0;
+  const prev = items[index - 1];
+  return Math.max(0, prev.startMs + prev.durationMs - items[index].startMs);
 }

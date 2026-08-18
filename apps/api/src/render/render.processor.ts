@@ -5,7 +5,7 @@ import { extname, join } from "path";
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { Job, Worker } from "bullmq";
 import type Redis from "ioredis";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffmpegPath from "ffmpeg-static";
 import { ExportStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
@@ -62,8 +62,9 @@ export class RenderProcessor implements OnModuleDestroy {
       const assets = await this.prisma.mediaAsset.findMany({ where: { id: { in: mediaAssetIds } } });
       const assetById = new Map(assets.map((a) => [a.id, a]));
 
+      const sortedVideoItems = this.sortByStart(videoItems);
       const videoSegments: VideoSegment[] = [];
-      for (const [index, item] of this.sortByStart(videoItems).entries()) {
+      for (const [index, item] of sortedVideoItems.entries()) {
         const asset = assetById.get(item.mediaAssetId);
         if (!asset) throw new Error(`Media asset ${item.mediaAssetId} not found`);
         const localPath = join(workDir, `v${index}${extname(asset.storageKey) || ".bin"}`);
@@ -73,16 +74,24 @@ export class RenderProcessor implements OnModuleDestroy {
           kind: asset.kind === "IMAGE" ? "image" : "video",
           trimInMs: item.trimInMs,
           durationMs: item.durationMs,
+          transitionInMs: this.overlapWithPrevious(sortedVideoItems, index),
+          transitionType: item.transitionIn,
         });
       }
 
+      const sortedAudioItems = this.sortByStart(audioItems);
       const audioSegments: AudioSegment[] = [];
-      for (const [index, item] of this.sortByStart(audioItems).entries()) {
+      for (const [index, item] of sortedAudioItems.entries()) {
         const asset = assetById.get(item.mediaAssetId);
         if (!asset) throw new Error(`Media asset ${item.mediaAssetId} not found`);
         const localPath = join(workDir, `a${index}${extname(asset.storageKey) || ".bin"}`);
         await this.storage.downloadToFile(asset.storageKey, localPath);
-        audioSegments.push({ localPath, trimInMs: item.trimInMs, durationMs: item.durationMs });
+        audioSegments.push({
+          localPath,
+          trimInMs: item.trimInMs,
+          durationMs: item.durationMs,
+          transitionInMs: this.overlapWithPrevious(sortedAudioItems, index),
+        });
       }
 
       const textOverlays: TextOverlay[] = [];
@@ -172,13 +181,24 @@ export class RenderProcessor implements OnModuleDestroy {
     return [...items].sort((a, b) => a.startMs - b.startMs);
   }
 
+  // How far `sorted[index]` reaches back into its predecessor's tail — 0 for
+  // the first item (no predecessor) or a hard cut. checkContiguous has
+  // already guaranteed this can't exceed either clip's own duration.
+  private overlapWithPrevious<T extends { startMs: number; durationMs: number }>(sorted: T[], index: number): number {
+    if (index === 0) return 0;
+    const prev = sorted[index - 1];
+    return Math.max(0, prev.startMs + prev.durationMs - sorted[index].startMs);
+  }
+
   private setStatus(id: string, status: ExportStatus, progress: number) {
     return this.prisma.exportJob.update({ where: { id }, data: { status, progress } });
   }
 
   private runFfmpeg(args: string[]): Promise<void> {
+    if (!ffmpegPath) throw new Error("No ffmpeg binary available for this platform/architecture");
+    const binaryPath = ffmpegPath;
     return new Promise((resolve, reject) => {
-      const proc = spawn(ffmpegInstaller.path, args);
+      const proc = spawn(binaryPath, args);
       let stderr = "";
       proc.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
