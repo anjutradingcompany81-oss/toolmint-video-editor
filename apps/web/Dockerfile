@@ -6,6 +6,13 @@ WORKDIR /repo
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+# apps/api/package.json (copied above, needed for workspace-lockfile
+# consistency) declares its own postinstall (prisma generate) — an
+# unscoped `npm ci` here installs the whole workspace tree and would try
+# to run that too, and fail without its schema file present. This image
+# doesn't need Prisma at all, so just give postinstall what it needs to
+# succeed rather than fight npm's workspace scoping.
+COPY apps/api/prisma apps/api/prisma
 RUN npm ci
 
 FROM node:20-bookworm-slim AS build
