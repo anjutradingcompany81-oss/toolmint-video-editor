@@ -17,8 +17,11 @@ RUN npm ci
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /repo
+# apps/web has no dependencies that need a nested node_modules of its own —
+# npm hoists all of them into the root one — so unlike apps/api's Dockerfile,
+# there's no apps/web/node_modules to copy here at all (confirmed locally;
+# npm ci reliably reproduces the same hoisting layout from the lockfile).
 COPY --from=deps /repo/node_modules ./node_modules
-COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY apps/web apps/web
 # NEXT_PUBLIC_* vars are inlined at build time, not read at runtime — must be
 # passed as a build arg (docker-compose.prod.yml does this), not just set as
