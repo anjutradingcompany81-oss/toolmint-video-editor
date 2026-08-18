@@ -17,6 +17,10 @@ RUN npm ci
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /repo
+# `npm run --workspace` needs the root package.json to know what a
+# "workspace" even is — easy to forget since it's not itself a dependency,
+# just plumbing npm reads directly.
+COPY package.json package-lock.json ./
 # apps/web has no dependencies that need a nested node_modules of its own —
 # npm hoists all of them into the root one — so unlike apps/api's Dockerfile,
 # there's no apps/web/node_modules to copy here at all (confirmed locally;

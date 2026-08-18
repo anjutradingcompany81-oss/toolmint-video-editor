@@ -19,6 +19,10 @@ RUN npm ci
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /repo
+# `npm run --workspace` needs the root package.json to know what a
+# "workspace" even is — easy to forget since it's not itself a dependency,
+# just plumbing npm reads directly.
+COPY package.json package-lock.json ./
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/api/node_modules ./apps/api/node_modules
 COPY apps/api apps/api
