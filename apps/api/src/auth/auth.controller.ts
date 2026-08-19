@@ -32,6 +32,15 @@ export class AuthController {
 
   @RateLimit(10, 60_000)
   @HttpCode(200)
+  @Post("guest")
+  async guest(@Res({ passthrough: true }) res: Response) {
+    const { user, accessToken, refreshToken } = await this.auth.guest();
+    this.setRefreshCookie(res, refreshToken);
+    return { user, accessToken };
+  }
+
+  @RateLimit(10, 60_000)
+  @HttpCode(200)
   @Post("login")
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const { user, accessToken, refreshToken } = await this.auth.login(dto);

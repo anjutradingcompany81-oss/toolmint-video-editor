@@ -5,18 +5,20 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api-client";
+import { GuestIcon } from "@/components/icons";
 
 const inputClass =
   "w-full rounded-md border border-[var(--tm-line)] bg-[var(--tm-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--tm-accent)]";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, guestLogin } = useAuth();
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -29,6 +31,18 @@ export default function LoginPage() {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Try again.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleGuest() {
+    setError(null);
+    setGuestLoading(true);
+    try {
+      await guestLogin();
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't start a guest session. Try again.");
+      setGuestLoading(false);
     }
   }
 
@@ -79,6 +93,22 @@ export default function LoginPage() {
           {submitting ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      <div className="flex items-center gap-3 text-xs text-[var(--tm-text-dim)]">
+        <span className="h-px flex-1 bg-[var(--tm-line)]" />
+        or
+        <span className="h-px flex-1 bg-[var(--tm-line)]" />
+      </div>
+
+      <button
+        onClick={handleGuest}
+        disabled={guestLoading}
+        title="Skips sign-up — you get your own private projects, but they're tied to this browser session rather than an email you can log back in with."
+        className="flex items-center justify-center gap-2 rounded-md border border-[var(--tm-line)] px-3 py-2 text-sm font-medium text-[var(--tm-text)] hover:border-[var(--tm-accent)] disabled:opacity-50"
+      >
+        <GuestIcon />
+        {guestLoading ? "Starting…" : "Try as guest"}
+      </button>
 
       <p className="text-sm text-[var(--tm-text-dim)]">
         Don&apos;t have an account?{" "}

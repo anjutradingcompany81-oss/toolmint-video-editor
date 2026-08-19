@@ -62,6 +62,7 @@ function buildUser(overrides: Partial<{ id: string; email: string; passwordHash:
     passwordHash: overrides.passwordHash ?? bcrypt.hashSync("correct-horse-battery", 4),
     displayName: "Ada Lovelace",
     emailVerifiedAt: overrides.emailVerifiedAt ?? null,
+    isGuest: false,
     mfaEnabled: false,
     mfaSecret: null,
     createdAt: new Date(),

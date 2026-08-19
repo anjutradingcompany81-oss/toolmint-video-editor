@@ -60,6 +60,33 @@ export class AuthService {
     return { user: toPublicUser(user), ...tokens };
   }
 
+  // Each call creates a brand-new, private account — never a shared one.
+  // The guest gets their own workspace and projects, invisible to every
+  // other guest and every real user, exactly like a normal registration
+  // minus the email/password step.
+  async guest(): Promise<AuthResult> {
+    const suffix = randomBytes(4).toString("hex");
+    const email = `guest_${suffix}@guest.toolmint.local`;
+    const displayName = `Guest ${suffix.slice(0, 4).toUpperCase()}`;
+    const passwordHash = await bcrypt.hash(randomBytes(24).toString("hex"), BCRYPT_ROUNDS);
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: { email, passwordHash, displayName, isGuest: true, emailVerifiedAt: new Date() },
+      });
+      const workspace = await tx.workspace.create({
+        data: { name: `${displayName}'s Workspace`, slug: buildWorkspaceSlug(displayName) },
+      });
+      await tx.membership.create({
+        data: { userId: created.id, workspaceId: workspace.id, role: "OWNER" },
+      });
+      return created;
+    });
+
+    const tokens = await this.issueTokenPair(user.id, user.email);
+    return { user: toPublicUser(user), ...tokens };
+  }
+
   async login(dto: LoginDto): Promise<AuthResult> {
     const user = await this.users.findByEmail(dto.email);
     if (!user) throw new UnauthorizedException(INVALID_CREDENTIALS);

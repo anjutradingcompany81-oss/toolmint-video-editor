@@ -111,7 +111,12 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex flex-col gap-2 border-t border-[var(--tm-line)] pt-3">
-          {!user.emailVerifiedAt && (
+          {user.isGuest && (
+            <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-2.5 py-2 text-[11px] text-amber-200">
+              Guest account — projects here aren&apos;t tied to an email. Register to keep access after this session.
+            </div>
+          )}
+          {!user.isGuest && !user.emailVerifiedAt && (
             <div className="rounded-md border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2.5 py-2 text-[11px] text-[var(--tm-text-dim)]">
               Email not verified.{" "}
               {resendState === "sent" ? (

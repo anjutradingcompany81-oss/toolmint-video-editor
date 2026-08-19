@@ -61,6 +61,10 @@ model User {
   passwordHash      String
   displayName       String
   emailVerifiedAt   DateTime?
+  // Created via "Try as guest" — a real, private account, just not tied to
+  // a real email. Flagged so a future cleanup job can expire old ones
+  // without touching accounts real users registered.
+  isGuest           Boolean   @default(false)
   mfaEnabled        Boolean   @default(false)
   mfaSecret         String?
   createdAt         DateTime  @default(now())

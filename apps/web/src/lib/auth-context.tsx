@@ -8,6 +8,7 @@ export interface AuthUser {
   email: string;
   displayName: string;
   emailVerifiedAt: string | null;
+  isGuest: boolean;
 }
 
 interface AuthResponse {
@@ -22,6 +23,7 @@ interface AuthContextValue {
   status: AuthStatus;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
+  guestLogin: () => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -73,6 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("authenticated");
   }, []);
 
+  const guestLogin = useCallback(async () => {
+    const data = await apiFetch<AuthResponse>("/auth/guest", { method: "POST" });
+    setAccessToken(data.accessToken);
+    setUser(data.user);
+    setStatus("authenticated");
+  }, []);
+
   const logout = useCallback(async () => {
     await apiFetch("/auth/logout", { method: "POST" }).catch(() => undefined);
     setAccessToken(null);
@@ -85,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me);
   }, []);
 
-  return <AuthContext.Provider value={{ user, status, login, register, logout, refreshUser }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, status, login, register, guestLogin, logout, refreshUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
