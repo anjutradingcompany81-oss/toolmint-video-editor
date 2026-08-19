@@ -14,6 +14,7 @@ out/
 .env.local
 .env.*.local
 deploy/.env.prod
+deploy/.env.test
 
 # logs
 *.log

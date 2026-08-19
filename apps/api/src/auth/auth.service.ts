@@ -72,7 +72,18 @@ export class AuthService {
   }
 
   async refresh(rawRefreshToken: string | undefined): Promise<AuthResult> {
-    if (!rawRefreshToken) throw new UnauthorizedException("Missing refresh token");
+    if (!rawRefreshToken) {
+      // Test-instance-only escape hatch (see deploy/docker-compose.test.yml)
+      // — never set on the real production stack. Lets a browser with no
+      // session cookie land signed in automatically, so testers don't need
+      // a real account.
+      if (this.config.get<string>("DISABLE_AUTH") === "true") {
+        const user = await this.getOrCreateTestUser();
+        const tokens = await this.issueTokenPair(user.id, user.email);
+        return { user: toPublicUser(user), ...tokens };
+      }
+      throw new UnauthorizedException("Missing refresh token");
+    }
 
     const tokenHash = hashToken(rawRefreshToken);
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
@@ -167,6 +178,26 @@ export class AuthService {
 
   refreshCookieTtlMs(): number {
     return parseDurationMs(this.config.get<string>("JWT_REFRESH_TTL", "30d"));
+  }
+
+  private async getOrCreateTestUser(): Promise<User> {
+    const email = "test@toolmint.local";
+    const existing = await this.users.findByEmail(email);
+    if (existing) return existing;
+
+    const passwordHash = await bcrypt.hash(randomBytes(24).toString("hex"), BCRYPT_ROUNDS);
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: { email, passwordHash, displayName: "Test User", emailVerifiedAt: new Date() },
+      });
+      const workspace = await tx.workspace.create({
+        data: { name: "Test Workspace", slug: buildWorkspaceSlug("Test User") },
+      });
+      await tx.membership.create({
+        data: { userId: created.id, workspaceId: workspace.id, role: "OWNER" },
+      });
+      return created;
+    });
   }
 
   private async issueTokenPair(userId: string, email: string): Promise<AuthTokens> {

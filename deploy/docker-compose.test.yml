@@ -1,0 +1,150 @@
+# A second, throwaway ToolMint stack for clicking around without logging in
+# — fully isolated from the real production stack (own network, volumes,
+# containers, database) and NOT reachable from the public internet: every
+# port below is bound to 127.0.0.1 only, with no nginx block and no DNS
+# record pointing at it. The only way in is an SSH tunnel — see
+# deploy/README.md "Test instance (no login required)".
+#
+# The API here runs with DISABLE_AUTH=true (see auth.service.ts refresh()),
+# which only takes effect when there's no session cookie at all — visiting
+# the tunneled web URL logs you in automatically as a fixed "Test User".
+# This flag must never be set on docker-compose.prod.yml.
+#
+# Run from the repo root:
+#   docker compose -f deploy/docker-compose.test.yml --env-file deploy/.env.test up -d --build
+
+name: toolmint-test
+
+networks:
+  toolmint_test_net:
+    name: toolmint_test_net
+
+volumes:
+  toolmint_test_postgres_data:
+    name: toolmint_test_postgres_data
+  toolmint_test_redis_data:
+    name: toolmint_test_redis_data
+  toolmint_test_minio_data:
+    name: toolmint_test_minio_data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: toolmint-test-postgres
+    restart: unless-stopped
+    networks: [toolmint_test_net]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - toolmint_test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: toolmint-test-redis
+    restart: unless-stopped
+    networks: [toolmint_test_net]
+    volumes:
+      - toolmint_test_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: toolmint-test-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    networks: [toolmint_test_net]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+    ports:
+      # Bound to loopback only — reach it through the SSH tunnel, never
+      # directly. The browser needs this one directly (not proxied through
+      # the API) since uploads go straight from browser to S3 via presigned
+      # URLs, same as prod.
+      - "127.0.0.1:41400:9000"
+    volumes:
+      - toolmint_test_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: toolmint-test-minio-init
+    networks: [toolmint_test_net]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY} &&
+      mc mb -p local/${S3_BUCKET}
+      "
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: toolmint-test-api
+    restart: unless-stopped
+    networks: [toolmint_test_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # Not "production" — the refresh cookie is only marked Secure when
+      # this is "production" (see auth.controller.ts), and the tunnel
+      # serves plain http://localhost, which can't carry a Secure cookie.
+      NODE_ENV: test
+      DISABLE_AUTH: "true"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      # Matches the local end of the SSH tunnel, not this container's own
+      # address — this URL gets embedded in presigned upload URLs the
+      # browser fetches directly.
+      S3_ENDPOINT: http://localhost:41400
+      S3_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_FORCE_PATH_STYLE: "true"
+      # CORS allowed origin — must match the tunneled web URL exactly.
+      WEB_APP_URL: http://localhost:41300
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 30d
+    ports:
+      - "127.0.0.1:41200:4000"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the JS bundle at build time — also the tunnel's local
+        # end, not this container's own address.
+        NEXT_PUBLIC_API_URL: http://localhost:41200
+    container_name: toolmint-test-web
+    restart: unless-stopped
+    networks: [toolmint_test_net]
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:41300:3000"
