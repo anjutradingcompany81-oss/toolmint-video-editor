@@ -10,6 +10,7 @@ import {
   type Project,
 } from "@/lib/projects-api";
 import { ApiError } from "@/lib/api-client";
+import { ArchiveIcon, ClapperboardIcon, CopyIcon, PencilIcon, TrashIcon } from "@/components/icons";
 
 interface ProjectCardProps {
   project: Project;
@@ -17,6 +18,20 @@ interface ProjectCardProps {
   onDuplicated: (project: Project) => void;
   onDeleted: (id: string) => void;
 }
+
+// Real per-project thumbnails would need a rendered frame from the
+// composition (project.thumbnailUrl exists in the schema for exactly that,
+// but nothing generates one yet) — until then, a ratio-accurate placeholder
+// swatch at least shows the project's shape at a glance, like Filmora's
+// grid does with real frames.
+const ASPECT_BOX: Record<Project["aspectRatio"], string> = {
+  RATIO_16_9: "aspect-[16/9]",
+  RATIO_9_16: "aspect-[9/16]",
+  RATIO_1_1: "aspect-square",
+  RATIO_4_5: "aspect-[4/5]",
+  RATIO_21_9: "aspect-[21/9]",
+  CUSTOM: "aspect-video",
+};
 
 export default function ProjectCard({ project, onChanged, onDuplicated, onDeleted }: ProjectCardProps) {
   const [renaming, setRenaming] = useState(false);
@@ -73,10 +88,24 @@ export default function ProjectCard({ project, onChanged, onDuplicated, onDelete
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-4">
-      <div className="flex items-start justify-between gap-2">
+    <div className="group flex flex-col overflow-hidden rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] transition-colors hover:border-[var(--tm-accent)]/60">
+      <Link href={`/dashboard/${project.id}`} className={`relative flex items-center justify-center bg-black/40 ${ASPECT_BOX[project.aspectRatio]}`}>
+        {project.thumbnailUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={project.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <ClapperboardIcon width={28} height={28} className="text-[var(--tm-text-dim)]" />
+        )}
+        {project.isArchived && (
+          <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--tm-text-dim)]">
+            Archived
+          </span>
+        )}
+      </Link>
+
+      <div className="flex flex-1 flex-col gap-2 p-3">
         {renaming ? (
-          <div className="flex flex-1 gap-2">
+          <div className="flex gap-2">
             <input
               autoFocus
               className="w-full rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1 text-sm"
@@ -91,44 +120,38 @@ export default function ProjectCard({ project, onChanged, onDuplicated, onDelete
                 }
               }}
             />
-            <button onClick={saveRename} disabled={busy} className="text-xs text-[var(--tm-accent)]">
+            <button onClick={saveRename} disabled={busy} className="shrink-0 text-xs text-[var(--tm-accent)]">
               Save
             </button>
           </div>
         ) : (
-          <Link href={`/dashboard/${project.id}`} className="font-medium hover:underline">
+          <Link href={`/dashboard/${project.id}`} className="truncate text-sm font-medium hover:underline">
             {project.title}
           </Link>
         )}
-        {project.isArchived && (
-          <span className="shrink-0 rounded-full bg-[var(--tm-line)] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--tm-text-dim)]">
-            Archived
-          </span>
-        )}
-      </div>
 
-      <p className="text-xs text-[var(--tm-text-dim)]">
-        {ASPECT_RATIO_LABELS[project.aspectRatio]} · {project.fps}fps · updated{" "}
-        {new Date(project.updatedAt).toLocaleDateString()}
-      </p>
+        <p className="text-xs text-[var(--tm-text-dim)]">
+          {ASPECT_RATIO_LABELS[project.aspectRatio]} · updated {new Date(project.updatedAt).toLocaleDateString()}
+        </p>
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <div className="flex flex-wrap gap-3 text-xs text-[var(--tm-text-dim)]">
-        {!renaming && (
-          <button disabled={busy} onClick={() => setRenaming(true)} className="hover:text-[var(--tm-text)]">
-            Rename
+        <div className="mt-auto flex items-center gap-3 pt-1 text-[var(--tm-text-dim)] opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {!renaming && (
+            <button disabled={busy} onClick={() => setRenaming(true)} title="Rename" className="hover:text-[var(--tm-text)]">
+              <PencilIcon />
+            </button>
+          )}
+          <button disabled={busy} onClick={toggleArchive} title={project.isArchived ? "Unarchive" : "Archive"} className="hover:text-[var(--tm-text)]">
+            <ArchiveIcon />
           </button>
-        )}
-        <button disabled={busy} onClick={toggleArchive} className="hover:text-[var(--tm-text)]">
-          {project.isArchived ? "Unarchive" : "Archive"}
-        </button>
-        <button disabled={busy} onClick={handleDuplicate} className="hover:text-[var(--tm-text)]">
-          Duplicate
-        </button>
-        <button disabled={busy} onClick={handleDelete} className="text-red-400 hover:text-red-300">
-          Delete
-        </button>
+          <button disabled={busy} onClick={handleDuplicate} title="Duplicate" className="hover:text-[var(--tm-text)]">
+            <CopyIcon />
+          </button>
+          <button disabled={busy} onClick={handleDelete} title="Delete" className="ml-auto hover:text-red-400">
+            <TrashIcon />
+          </button>
+        </div>
       </div>
     </div>
   );

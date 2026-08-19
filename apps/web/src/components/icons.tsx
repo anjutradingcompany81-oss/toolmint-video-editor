@@ -114,6 +114,69 @@ export function AudioKindIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function FolderIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 6a1 1 0 0 1 1-1h3.8l1.4 1.6H16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6z" />
+    </svg>
+  );
+}
+
+export function ClapperboardIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="8" width="13" height="8" rx="1" />
+      <path d="M3.7 8l1.6-3.6 2.6 1.8L9.5 3l2.6 1.8 1.6-2.4 2.6 2.4-1.3 3.2" />
+    </svg>
+  );
+}
+
+export function SignOutIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M8.5 4H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3.5" />
+      <path d="M13 13.5L16.5 10 13 6.5M16.3 10H8" />
+    </svg>
+  );
+}
+
+export function PencilIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12.5 3.5l4 4L6 18H2v-4L12.5 3.5z" />
+      <path d="M11 5l4 4" />
+    </svg>
+  );
+}
+
+export function CopyIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="7.5" y="7.5" width="9" height="9" rx="1.2" />
+      <path d="M12.5 7.5V4.7a1.2 1.2 0 0 0-1.2-1.2H4.2A1.2 1.2 0 0 0 3 4.7v7.1a1.2 1.2 0 0 0 1.2 1.2H7" />
+    </svg>
+  );
+}
+
+export function ArchiveIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="14" height="3.2" rx="1" />
+      <path d="M4.3 7.2V15a1 1 0 0 0 1 1h9.4a1 1 0 0 0 1-1V7.2" />
+      <path d="M8.3 10.5h3.4" />
+    </svg>
+  );
+}
+
+export function GuestIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="10" cy="6.8" r="3" />
+      <path d="M4 16.5c0-3 2.7-5.2 6-5.2s6 2.2 6 5.2" strokeDasharray="2.2 2.2" />
+    </svg>
+  );
+}
+
 export function TrackKindIcon({ kind, ...props }: SVGProps<SVGSVGElement> & { kind: "video" | "audio" | "text" }) {
   if (kind === "video") return <VideoKindIcon {...props} />;
   if (kind === "audio") return <AudioKindIcon {...props} />;
