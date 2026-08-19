@@ -3,6 +3,7 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type { TimelineItem } from "@/lib/composition-api";
 import type { MediaAsset } from "@/lib/projects-api";
+import Waveform from "./waveform";
 
 const MIN_DURATION_MS = 200;
 const SNAP_MS = 50;
@@ -123,7 +124,16 @@ export default function TimelineItemBlock({ item, media, pxPerSecond, selected, 
       } ${locked ? "cursor-not-allowed opacity-70" : "cursor-grab active:cursor-grabbing"}`}
       title={title}
     >
-      <span className="pointer-events-none block truncate px-2 leading-[2rem]">{label}</span>
+      {item.type !== "text" && media?.waveformPeaks && media.waveformPeaks.length > 0 && (
+        <Waveform
+          peaks={media.waveformPeaks}
+          sourceDurationMs={media.durationMs}
+          trimInMs={item.trimInMs}
+          durationMs={item.durationMs}
+          className="pointer-events-none absolute inset-x-0 bottom-0 top-4 opacity-80"
+        />
+      )}
+      <span className="pointer-events-none relative block truncate px-2 leading-[2rem]">{label}</span>
 
       {!locked && (
         <>

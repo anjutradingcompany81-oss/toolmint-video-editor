@@ -33,7 +33,7 @@ function buildPrismaMock(): PrismaMock {
   return prisma;
 }
 
-function buildProject(overrides: Partial<{ id: string; workspaceId: string; title: string }> = {}) {
+function buildProject(overrides: Partial<{ id: string; workspaceId: string; title: string; thumbnailKey: string | null }> = {}) {
   return {
     id: overrides.id ?? "proj_1",
     workspaceId: overrides.workspaceId ?? "ws_1",
@@ -42,7 +42,7 @@ function buildProject(overrides: Partial<{ id: string; workspaceId: string; titl
     customWidth: null,
     customHeight: null,
     fps: 30,
-    thumbnailUrl: null,
+    thumbnailKey: overrides.thumbnailKey ?? null,
     isArchived: false,
     createdById: "user_1",
     createdAt: new Date(),
@@ -52,12 +52,16 @@ function buildProject(overrides: Partial<{ id: string; workspaceId: string; titl
 
 describe("ProjectsService", () => {
   let prisma: PrismaMock;
-  let storage: jest.Mocked<Pick<StorageService, "delete">>;
+  let storage: jest.Mocked<Pick<StorageService, "delete" | "putObject" | "presignDownload">>;
   let service: ProjectsService;
 
   beforeEach(() => {
     prisma = buildPrismaMock();
-    storage = { delete: jest.fn().mockResolvedValue(undefined) };
+    storage = {
+      delete: jest.fn().mockResolvedValue(undefined),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      presignDownload: jest.fn().mockResolvedValue("https://storage.example/thumb-signed"),
+    };
     service = new ProjectsService(prisma as unknown as PrismaService, storage as unknown as StorageService);
   });
 
@@ -151,6 +155,72 @@ describe("ProjectsService", () => {
     });
   });
 
+  describe("findOne — thumbnail presigning", () => {
+    it("presigns a thumbnailKey into thumbnailUrl and never leaks the raw key", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject({ thumbnailKey: "projects/proj_1/thumbnail-abc.jpg" }));
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.VIEWER });
+
+      const project = await service.findOne("user_1", "proj_1");
+
+      expect(storage.presignDownload).toHaveBeenCalledWith("projects/proj_1/thumbnail-abc.jpg");
+      expect(project.thumbnailUrl).toBe("https://storage.example/thumb-signed");
+      expect((project as unknown as Record<string, unknown>).thumbnailKey).toBeUndefined();
+    });
+
+    it("leaves thumbnailUrl null without ever calling presign when there's no thumbnail yet", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject());
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.VIEWER });
+
+      const project = await service.findOne("user_1", "proj_1");
+
+      expect(storage.presignDownload).not.toHaveBeenCalled();
+      expect(project.thumbnailUrl).toBeNull();
+    });
+  });
+
+  describe("setThumbnail", () => {
+    it("uploads the frame and points thumbnailKey at it", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject());
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.EDITOR });
+      prisma.project.update.mockImplementation((args: { data: { thumbnailKey: string } }) =>
+        Promise.resolve(buildProject({ thumbnailKey: args.data.thumbnailKey })),
+      );
+
+      const result = await service.setThumbnail("user_1", "proj_1", Buffer.from("fake jpeg bytes"), "image/jpeg");
+
+      expect(storage.putObject).toHaveBeenCalledWith(expect.stringMatching(/^projects\/proj_1\/thumbnail-.*\.jpg$/), expect.any(Buffer), "image/jpeg");
+      expect(result.thumbnailUrl).toBe("https://storage.example/thumb-signed");
+    });
+
+    it("deletes the previous thumbnail object after a new one replaces it", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject({ thumbnailKey: "projects/proj_1/thumbnail-old.jpg" }));
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.EDITOR });
+      prisma.project.update.mockResolvedValue(buildProject({ thumbnailKey: "projects/proj_1/thumbnail-new.jpg" }));
+
+      await service.setThumbnail("user_1", "proj_1", Buffer.from("fake jpeg bytes"), "image/jpeg");
+
+      expect(storage.delete).toHaveBeenCalledWith("projects/proj_1/thumbnail-old.jpg");
+    });
+
+    it("rejects a viewer trying to set a thumbnail", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject());
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.VIEWER });
+
+      await expect(service.setThumbnail("user_1", "proj_1", Buffer.from("x"), "image/jpeg")).rejects.toBeInstanceOf(ForbiddenException);
+      expect(storage.putObject).not.toHaveBeenCalled();
+    });
+
+    it("rejects an oversized thumbnail", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject());
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.EDITOR });
+
+      await expect(service.setThumbnail("user_1", "proj_1", Buffer.alloc(3 * 1024 * 1024), "image/jpeg")).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(storage.putObject).not.toHaveBeenCalled();
+    });
+  });
+
   describe("remove", () => {
     it("deletes stored media objects before deleting the project", async () => {
       prisma.project.findUnique.mockResolvedValue(buildProject());
@@ -161,6 +231,15 @@ describe("ProjectsService", () => {
 
       expect(storage.delete).toHaveBeenCalledWith("projects/proj_1/a/file.mp4");
       expect(prisma.project.delete).toHaveBeenCalledWith({ where: { id: "proj_1" } });
+    });
+
+    it("also deletes the project's own thumbnail object, if it has one", async () => {
+      prisma.project.findUnique.mockResolvedValue(buildProject({ thumbnailKey: "projects/proj_1/thumbnail-abc.jpg" }));
+      prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.OWNER });
+
+      await service.remove("user_1", "proj_1");
+
+      expect(storage.delete).toHaveBeenCalledWith("projects/proj_1/thumbnail-abc.jpg");
     });
   });
 });

@@ -1,5 +1,6 @@
+import { randomUUID } from "crypto";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { MembershipRole, ProjectAspectRatio } from "@prisma/client";
+import { MembershipRole, Project, ProjectAspectRatio } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CreateProjectDto } from "./dto/create-project.dto";
@@ -7,6 +8,11 @@ import { UpdateProjectDto } from "./dto/update-project.dto";
 import { buildEmptyComposition } from "./composition.util";
 
 const READ_ONLY_ROLES: MembershipRole[] = [MembershipRole.VIEWER, MembershipRole.REVIEWER];
+const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+
+export interface ProjectResponse extends Omit<Project, "thumbnailKey"> {
+  thumbnailUrl: string | null;
+}
 
 @Injectable()
 export class ProjectsService {
@@ -15,7 +21,7 @@ export class ProjectsService {
     private readonly storage: StorageService,
   ) {}
 
-  async create(userId: string, dto: CreateProjectDto) {
+  async create(userId: string, dto: CreateProjectDto): Promise<ProjectResponse> {
     const workspaceId = await this.resolveWorkspaceId(userId, dto.workspaceId);
     const aspectRatio = dto.aspectRatio ?? ProjectAspectRatio.RATIO_16_9;
 
@@ -23,7 +29,7 @@ export class ProjectsService {
       throw new BadRequestException("customWidth and customHeight are required for a custom aspect ratio");
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const project = await this.prisma.$transaction(async (tx) => {
       const project = await tx.project.create({
         data: {
           workspaceId,
@@ -45,11 +51,12 @@ export class ProjectsService {
       });
       return project;
     });
+    return this.toResponse(project);
   }
 
-  async list(userId: string, options: { includeArchived: boolean; search?: string }) {
+  async list(userId: string, options: { includeArchived: boolean; search?: string }): Promise<ProjectResponse[]> {
     const workspaceIds = await this.workspaceIdsFor(userId);
-    return this.prisma.project.findMany({
+    const projects = await this.prisma.project.findMany({
       where: {
         workspaceId: { in: workspaceIds },
         ...(options.includeArchived ? {} : { isArchived: false }),
@@ -57,28 +64,50 @@ export class ProjectsService {
       },
       orderBy: { updatedAt: "desc" },
     });
+    return Promise.all(projects.map((p) => this.toResponse(p)));
   }
 
-  async findOne(userId: string, projectId: string) {
+  async findOne(userId: string, projectId: string): Promise<ProjectResponse> {
     const project = await this.prisma.project.findUnique({ where: { id: projectId } });
     if (!project) throw new NotFoundException("Project not found");
     await this.assertMember(userId, project.workspaceId);
-    return project;
+    return this.toResponse(project);
   }
 
-  async update(userId: string, projectId: string, dto: UpdateProjectDto) {
+  async update(userId: string, projectId: string, dto: UpdateProjectDto): Promise<ProjectResponse> {
     const project = await this.ensureEditable(userId, projectId);
-    return this.prisma.project.update({ where: { id: project.id }, data: dto });
+    const updated = await this.prisma.project.update({ where: { id: project.id }, data: dto });
+    return this.toResponse(updated);
   }
 
-  async duplicate(userId: string, projectId: string) {
+  // Generated client-side from the editor's own preview canvas — it already
+  // renders exactly what the timeline currently shows, so this reuses that
+  // instead of standing up a separate server-side rendering path just for a
+  // thumbnail. Best-effort: a project without one yet just shows a
+  // placeholder in the dashboard grid, never blocks anything.
+  async setThumbnail(userId: string, projectId: string, buffer: Buffer, mimeType: string): Promise<ProjectResponse> {
+    const project = await this.ensureEditable(userId, projectId);
+    if (buffer.length > THUMBNAIL_MAX_BYTES) {
+      throw new BadRequestException(`Thumbnails are limited to ${Math.floor(THUMBNAIL_MAX_BYTES / 1024)}KB`);
+    }
+
+    const previousKey = project.thumbnailKey;
+    const thumbnailKey = `projects/${project.id}/thumbnail-${randomUUID()}.jpg`;
+    await this.storage.putObject(thumbnailKey, buffer, mimeType);
+    const updated = await this.prisma.project.update({ where: { id: project.id }, data: { thumbnailKey } });
+    if (previousKey) await this.storage.delete(previousKey).catch(() => undefined);
+
+    return this.toResponse(updated);
+  }
+
+  async duplicate(userId: string, projectId: string): Promise<ProjectResponse> {
     const project = await this.findOne(userId, projectId);
     const latestVersion = await this.prisma.projectVersion.findFirst({
       where: { projectId: project.id },
       orderBy: { createdAt: "desc" },
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    const copy = await this.prisma.$transaction(async (tx) => {
       const copy = await tx.project.create({
         data: {
           workspaceId: project.workspaceId,
@@ -100,6 +129,7 @@ export class ProjectsService {
       });
       return copy;
     });
+    return this.toResponse(copy);
   }
 
   async remove(userId: string, projectId: string): Promise<void> {
@@ -114,8 +144,15 @@ export class ProjectsService {
     // deleted-but-still-billed object is worse, so the DB delete proceeds
     // either way.
     await Promise.all(assets.map((asset) => this.storage.delete(asset.storageKey).catch(() => undefined)));
+    if (project.thumbnailKey) await this.storage.delete(project.thumbnailKey).catch(() => undefined);
 
     await this.prisma.project.delete({ where: { id: project.id } });
+  }
+
+  private async toResponse(project: Project): Promise<ProjectResponse> {
+    const { thumbnailKey, ...rest } = project;
+    const thumbnailUrl = thumbnailKey ? await this.storage.presignDownload(thumbnailKey) : null;
+    return { ...rest, thumbnailUrl };
   }
 
   // Shared with MediaModule: uploading/deleting media on a project requires

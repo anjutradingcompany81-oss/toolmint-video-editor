@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { ApiError } from "@/lib/api-client";
-import { listMedia, type MediaAsset } from "@/lib/projects-api";
+import { listMedia, setProjectThumbnail, type MediaAsset } from "@/lib/projects-api";
 import {
   defaultClipDurationMs,
   newTextItem,
@@ -121,6 +121,28 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenes, selected, playheadMs, sceneId, undo, redo]);
+
+  // Refreshes the project's dashboard thumbnail from whatever the preview
+  // canvas currently shows, right after an edit actually saves — not on
+  // every keystroke (only real save completions), and not more than once
+  // per cooldown window even if saves keep completing back-to-back.
+  const prevSaveStatusRef = useRef(saveStatus);
+  const lastThumbnailAtRef = useRef(0);
+  const THUMBNAIL_COOLDOWN_MS = 20_000;
+  useEffect(() => {
+    const justSaved = prevSaveStatusRef.current === "saving" && saveStatus === "saved";
+    prevSaveStatusRef.current = saveStatus;
+    if (!justSaved) return;
+    if (Date.now() - lastThumbnailAtRef.current < THUMBNAIL_COOLDOWN_MS) return;
+    lastThumbnailAtRef.current = Date.now();
+
+    previewRef.current
+      ?.captureFrame()
+      .then((blob) => {
+        if (blob) return setProjectThumbnail(projectId, blob);
+      })
+      .catch(() => undefined);
+  }, [saveStatus, projectId]);
 
   const scene = scenes.find((s) => s.id === sceneId);
   const armedMedia = media.find((a) => a.id === armedMediaId) ?? null;

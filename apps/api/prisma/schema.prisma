@@ -155,7 +155,10 @@ model Project {
   customWidth   Int?
   customHeight  Int?
   fps           Int                @default(30)
-  thumbnailUrl  String?
+  // Storage key, not a URL — presigned into thumbnailUrl at response time
+  // (same pattern as MediaAsset.storageKey/previewUrl), since the bucket
+  // isn't publicly readable.
+  thumbnailKey  String?
   isArchived    Boolean            @default(false)
   createdById   String
   createdAt     DateTime           @default(now())
@@ -199,6 +202,11 @@ model MediaAsset {
   durationMs  Int?
   width       Int?
   height      Int?
+  // Flat array of [min0, max0, min1, max1, ...] floats in -1..1, fixed at
+  // 200 buckets regardless of clip length — the timeline stretches this to
+  // whatever pixel width the clip occupies. Null for images/documents, or
+  // if the file has no audio track (e.g. a silent video).
+  waveformPeaks Json?
   checksum    String?
   uploadedById String
   createdAt   DateTime          @default(now())

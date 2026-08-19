@@ -1,10 +1,12 @@
 import { randomUUID, createHash } from "crypto";
-import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
-import { MediaAsset, MediaAssetStatus } from "@prisma/client";
+import { extname } from "path";
+import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from "@nestjs/common";
+import { MediaAsset, MediaAssetStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { ProjectsService } from "../projects/projects.service";
 import { MEDIA_RULES, resolveMediaKind, sanitizeFileName } from "./media.constants";
+import { MediaProbeService } from "./media-probe.service";
 
 export interface MediaAssetResponse extends MediaAsset {
   previewUrl: string | null;
@@ -12,10 +14,13 @@ export interface MediaAssetResponse extends MediaAsset {
 
 @Injectable()
 export class MediaService {
+  private readonly logger = new Logger(MediaService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly projects: ProjectsService,
+    private readonly probe: MediaProbeService,
   ) {}
 
   async upload(userId: string, projectId: string, file: Express.Multer.File): Promise<MediaAssetResponse> {
@@ -54,9 +59,37 @@ export class MediaService {
       throw new InternalServerErrorException("Upload failed while saving to storage");
     }
 
+    // Best-effort enrichment — duration/dimensions/waveform make the editor
+    // meaningfully better (real trim limits, real waveforms) but a probe
+    // failure shouldn't fail the upload itself; the asset still becomes
+    // READY with those fields left null.
+    let probed: { durationMs: number | null; width: number | null; height: number | null; waveformPeaks: number[] | null } = {
+      durationMs: null,
+      width: null,
+      height: null,
+      waveformPeaks: null,
+    };
+    if (kind !== "DOCUMENT") {
+      try {
+        const ext = extname(file.originalname).replace(".", "") || "bin";
+        probed = await this.probe.probe(file.buffer, ext, kind === "VIDEO" || kind === "AUDIO");
+      } catch (err) {
+        this.logger.warn(`Media probe failed for ${asset.id}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     const ready = await this.prisma.mediaAsset.update({
       where: { id: asset.id },
-      data: { status: MediaAssetStatus.READY },
+      data: {
+        status: MediaAssetStatus.READY,
+        durationMs: probed.durationMs,
+        width: probed.width,
+        height: probed.height,
+        // Prisma's typed Json column needs the sentinel Prisma.JsonNull for
+        // an actual null value — a bare `null` there means "leave the
+        // column untouched," not "clear it."
+        waveformPeaks: probed.waveformPeaks === null ? Prisma.JsonNull : probed.waveformPeaks,
+      },
     });
 
     return this.toResponse(ready);

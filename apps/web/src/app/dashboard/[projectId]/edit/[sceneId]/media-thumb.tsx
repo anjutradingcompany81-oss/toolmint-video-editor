@@ -3,6 +3,7 @@
 import { useRef } from "react";
 import type { MediaAsset } from "@/lib/projects-api";
 import { AudioKindIcon } from "@/components/icons";
+import Waveform from "./waveform";
 
 // Video elements don't paint a frame until something forces a decode — a
 // tiny seek right after metadata loads is the standard trick to get a real
@@ -31,6 +32,20 @@ export default function MediaThumb({ asset, className }: { asset: MediaAsset; cl
         onLoadedMetadata={handleVideoLoaded}
         className={className}
       />
+    );
+  }
+
+  if (asset.kind === "AUDIO" && asset.waveformPeaks && asset.waveformPeaks.length > 0) {
+    return (
+      <div className={`relative flex items-center justify-center bg-[var(--tm-bg)] text-[var(--tm-accent)] ${className ?? ""}`}>
+        <Waveform
+          peaks={asset.waveformPeaks}
+          sourceDurationMs={asset.durationMs}
+          trimInMs={0}
+          durationMs={asset.durationMs ?? 0}
+          className="absolute inset-2"
+        />
+      </div>
     );
   }
 

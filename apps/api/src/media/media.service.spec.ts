@@ -1,9 +1,10 @@
 import { BadRequestException, InternalServerErrorException, NotFoundException } from "@nestjs/common";
-import { MediaAssetKind, MediaAssetStatus } from "@prisma/client";
+import { MediaAssetKind, MediaAssetStatus, Prisma } from "@prisma/client";
 import { MediaService } from "./media.service";
 import type { PrismaService } from "../prisma/prisma.service";
 import type { StorageService } from "../storage/storage.service";
 import type { ProjectsService } from "../projects/projects.service";
+import type { MediaProbeService } from "./media-probe.service";
 
 interface PrismaMock {
   mediaAsset: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock; delete: jest.Mock };
@@ -49,6 +50,7 @@ describe("MediaService", () => {
   let prisma: PrismaMock;
   let storage: jest.Mocked<Pick<StorageService, "putObject" | "delete" | "presignDownload">>;
   let projects: jest.Mocked<Pick<ProjectsService, "ensureEditable" | "findOne">>;
+  let probe: jest.Mocked<Pick<MediaProbeService, "probe">>;
   let service: MediaService;
 
   beforeEach(() => {
@@ -70,11 +72,15 @@ describe("MediaService", () => {
       ensureEditable: jest.fn().mockResolvedValue({ id: "proj_1" }),
       findOne: jest.fn().mockResolvedValue({ id: "proj_1" }),
     };
+    probe = {
+      probe: jest.fn().mockResolvedValue({ durationMs: null, width: null, height: null, waveformPeaks: null }),
+    };
 
     service = new MediaService(
       prisma as unknown as PrismaService,
       storage as unknown as StorageService,
       projects as unknown as ProjectsService,
+      probe as unknown as MediaProbeService,
     );
   });
 
@@ -101,9 +107,47 @@ describe("MediaService", () => {
       expect(projects.ensureEditable).toHaveBeenCalledWith("user_1", "proj_1");
       expect(storage.putObject).toHaveBeenCalledWith(expect.stringContaining("projects/proj_1/"), file.buffer, "video/mp4");
       expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: MediaAssetStatus.READY } }),
+        expect.objectContaining({
+          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, waveformPeaks: Prisma.JsonNull },
+        }),
       );
       expect(result.previewUrl).toBe("https://storage.example/signed");
+    });
+
+    it("probes video uploads for duration/dimensions/waveform and persists the result", async () => {
+      probe.probe.mockResolvedValueOnce({ durationMs: 6000, width: 640, height: 360, waveformPeaks: [-0.5, 0.5] });
+      const file = buildFile();
+
+      await service.upload("user_1", "proj_1", file);
+
+      expect(probe.probe).toHaveBeenCalledWith(file.buffer, "mp4", true);
+      expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: MediaAssetStatus.READY, durationMs: 6000, width: 640, height: 360, waveformPeaks: [-0.5, 0.5] },
+        }),
+      );
+    });
+
+    it("skips probing entirely for documents", async () => {
+      const file = buildFile({ originalname: "brief.pdf", mimetype: "application/pdf" });
+
+      await service.upload("user_1", "proj_1", file);
+
+      expect(probe.probe).not.toHaveBeenCalled();
+    });
+
+    it("still marks the asset READY when probing throws", async () => {
+      probe.probe.mockRejectedValueOnce(new Error("ffprobe crashed"));
+      const file = buildFile();
+
+      const result = await service.upload("user_1", "proj_1", file);
+
+      expect(result.status).toBe(MediaAssetStatus.READY);
+      expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, waveformPeaks: Prisma.JsonNull },
+        }),
+      );
     });
 
     it("marks the asset FAILED and surfaces a 500 when the storage write fails", async () => {

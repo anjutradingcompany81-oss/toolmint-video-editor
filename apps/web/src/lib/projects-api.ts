@@ -41,6 +41,10 @@ export interface MediaAsset {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  // Flat [min0, max0, min1, max1, ...] array, floats in -1..1, fixed at 200
+  // buckets regardless of clip length — stretched to fit whatever pixel
+  // width the clip occupies wherever it's drawn.
+  waveformPeaks: number[] | null;
   createdAt: string;
   previewUrl: string | null;
 }
@@ -71,6 +75,14 @@ export function duplicateProject(id: string) {
 
 export function deleteProject(id: string) {
   return apiFetch<void>(`/projects/${id}`, { method: "DELETE" });
+}
+
+// Fed a real frame captured from the editor's own preview canvas — see
+// scene-preview.tsx's captureFrame.
+export function setProjectThumbnail(id: string, blob: Blob) {
+  const formData = new FormData();
+  formData.append("file", blob, "thumbnail.jpg");
+  return apiFetch<Project>(`/projects/${id}/thumbnail`, { method: "POST", body: formData });
 }
 
 export function listMedia(projectId: string) {

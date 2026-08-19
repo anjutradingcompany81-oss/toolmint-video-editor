@@ -91,6 +91,10 @@ interface ScenePreviewProps {
 
 export interface ScenePreviewHandle {
   togglePlayPause: () => void;
+  // Snapshots whatever the canvas currently shows — reused as the
+  // project's thumbnail instead of standing up a separate server-side
+  // rendering path just to produce one image.
+  captureFrame: () => Promise<Blob | null>;
 }
 
 function ScenePreview(
@@ -355,7 +359,15 @@ function ScenePreview(
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  useImperativeHandle(ref, () => ({ togglePlayPause: handlePlayPause }));
+  useImperativeHandle(ref, () => ({
+    togglePlayPause: handlePlayPause,
+    captureFrame: () =>
+      new Promise<Blob | null>((resolve) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return resolve(null);
+        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
+      }),
+  }));
 
   const scrubDraggingRef = useRef(false);
 
@@ -440,3 +452,4 @@ function ScenePreview(
 }
 
 export default forwardRef(ScenePreview);
+
