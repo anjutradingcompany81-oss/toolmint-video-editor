@@ -177,6 +177,24 @@ export function GuestIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function UndoIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5 8h7a4 4 0 0 1 0 8H8.5" />
+      <path d="M8 4.5L4.5 8 8 11.5" />
+    </svg>
+  );
+}
+
+export function RedoIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M15 8H8a4 4 0 0 0 0 8h3.5" />
+      <path d="M12 4.5L15.5 8 12 11.5" />
+    </svg>
+  );
+}
+
 export function TrackKindIcon({ kind, ...props }: SVGProps<SVGSVGElement> & { kind: "video" | "audio" | "text" }) {
   if (kind === "video") return <VideoKindIcon {...props} />;
   if (kind === "audio") return <AudioKindIcon {...props} />;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type Ref } from "react";
 import type { AspectRatio, MediaAsset } from "@/lib/projects-api";
 import type { MediaTimelineItem, Scene, TextTimelineItem, Track, Transform } from "@/lib/composition-api";
 import { PauseIcon, PlayIcon } from "@/components/icons";
@@ -89,7 +89,14 @@ interface ScenePreviewProps {
   onPlayheadChange: (ms: number) => void;
 }
 
-export default function ScenePreview({ scene, media, aspectRatio, customWidth, customHeight, endMs, playheadMs, onPlayheadChange }: ScenePreviewProps) {
+export interface ScenePreviewHandle {
+  togglePlayPause: () => void;
+}
+
+function ScenePreview(
+  { scene, media, aspectRatio, customWidth, customHeight, endMs, playheadMs, onPlayheadChange }: ScenePreviewProps,
+  ref: Ref<ScenePreviewHandle>,
+) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoElsRef = useRef(new Map<string, HTMLVideoElement>());
   const imageElsRef = useRef(new Map<string, HTMLImageElement>());
@@ -348,6 +355,8 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     rafRef.current = requestAnimationFrame(tick);
   }
 
+  useImperativeHandle(ref, () => ({ togglePlayPause: handlePlayPause }));
+
   const scrubDraggingRef = useRef(false);
 
   function seekFromClientX(barEl: HTMLDivElement, clientX: number) {
@@ -429,3 +438,5 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     </div>
   );
 }
+
+export default forwardRef(ScenePreview);

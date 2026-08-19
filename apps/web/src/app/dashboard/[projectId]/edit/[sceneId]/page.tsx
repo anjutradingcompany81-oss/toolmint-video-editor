@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState, type DragEvent, type MouseEvent } from "react";
+import { use, useEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
@@ -22,11 +22,11 @@ import {
   type TransitionType,
 } from "@/lib/composition-api";
 import SaveIndicator from "@/components/save-indicator";
-import { LockIcon, MuteIcon, PlusIcon, ScissorsIcon, TrackKindIcon, TrashIcon, UnlockIcon, VolumeIcon } from "@/components/icons";
+import { LockIcon, MuteIcon, PlusIcon, RedoIcon, ScissorsIcon, TrackKindIcon, TrashIcon, UndoIcon, UnlockIcon, VolumeIcon } from "@/components/icons";
 import MediaLibrary from "./media-library";
 import TimelineItemBlock, { type ItemPatch } from "./timeline-item-block";
 import ExportPanel from "./export-panel";
-import ScenePreview from "./scene-preview";
+import ScenePreview, { type ScenePreviewHandle } from "./scene-preview";
 
 const MIN_PX_PER_SECOND = 20;
 const MAX_PX_PER_SECOND = 200;
@@ -49,10 +49,8 @@ function sceneEndMs(scene: Scene): number {
 export default function TimelinePage({ params }: { params: Promise<{ projectId: string; sceneId: string }> }) {
   const { projectId, sceneId } = use(params);
   const { status } = useRequireAuth();
-  const { project, composition, scenes, loading, loadError, saveStatus, saveError, withScenes } = useCompositionEditor(
-    projectId,
-    status === "authenticated",
-  );
+  const { project, composition, scenes, loading, loadError, saveStatus, saveError, withScenes, undo, redo, canUndo, canRedo } =
+    useCompositionEditor(projectId, status === "authenticated");
 
   const [media, setMedia] = useState<MediaAsset[]>([]);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -61,6 +59,7 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
   const [playheadMs, setPlayheadMs] = useState(0);
   const [pxPerSecond, setPxPerSecond] = useState(DEFAULT_PX_PER_SECOND);
   const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null);
+  const previewRef = useRef<ScenePreviewHandle>(null);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -76,6 +75,52 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
       cancelled = true;
     };
   }, [status, projectId]);
+
+  // Keyboard shortcuts. Ignored while typing in a form field so hotkeys
+  // don't hijack text/number/color inputs elsewhere on the page.
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (isTypingTarget(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (e.key === " ") {
+        e.preventDefault();
+        previewRef.current?.togglePlayPause();
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selected) {
+        e.preventDefault();
+        deleteItem(selected.trackId, selected.itemId);
+        return;
+      }
+      if (e.key.toLowerCase() === "s" && selected) {
+        const currentScene = scenes.find((s) => s.id === sceneId);
+        const track = currentScene?.tracks.find((t) => t.id === selected.trackId);
+        const item = track?.items.find((i) => i.id === selected.itemId);
+        if (item && item.type !== "text") splitAtPlayhead(selected.trackId, item);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenes, selected, playheadMs, sceneId, undo, redo]);
 
   const scene = scenes.find((s) => s.id === sceneId);
   const armedMedia = media.find((a) => a.id === armedMediaId) ?? null;
@@ -248,7 +293,27 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
           </Link>
           <h1 className="mt-1 text-xl font-semibold">{scene.name}</h1>
         </div>
-        <SaveIndicator status={saveStatus} error={saveError} />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Ctrl+Z)"
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--tm-line)] text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)] disabled:opacity-30 disabled:hover:border-[var(--tm-line)]"
+            >
+              <UndoIcon />
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Ctrl+Shift+Z)"
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--tm-line)] text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)] disabled:opacity-30 disabled:hover:border-[var(--tm-line)]"
+            >
+              <RedoIcon />
+            </button>
+          </div>
+          <SaveIndicator status={saveStatus} error={saveError} />
+        </div>
       </div>
 
       {/* Three-pane row: media bin | preview | inspector — the classic NLE layout */}
@@ -297,6 +362,7 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
 
         <div className="min-w-0 flex justify-center">
           <ScenePreview
+            ref={previewRef}
             scene={scene}
             media={media}
             aspectRatio={project.aspectRatio}
@@ -444,9 +510,9 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
       {/* Timeline spans the full width, under all three panes above — matches
           how every mainstream NLE lays this out. */}
       <div className="mt-4 flex items-center justify-between text-xs text-[var(--tm-text-dim)]">
-        <span>
+        <span title="Space: play/pause · Ctrl+Z: undo · Ctrl+Shift+Z: redo · Delete: remove selected · S: split at playhead">
           Playhead: <span className="font-mono tabular-nums">{(playheadMs / 1000).toFixed(2)}s</span> · click the ruler to move it, drag a clip
-          to reposition or trim it.
+          to reposition or trim it · <span className="underline decoration-dotted">keyboard shortcuts</span>
         </span>
         <label className="flex items-center gap-2">
           Zoom
