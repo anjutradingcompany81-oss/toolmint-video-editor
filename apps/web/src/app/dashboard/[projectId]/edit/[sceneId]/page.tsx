@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState, type MouseEvent } from "react";
+import { use, useEffect, useState, type DragEvent, type MouseEvent } from "react";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
@@ -22,22 +22,21 @@ import {
   type TransitionType,
 } from "@/lib/composition-api";
 import SaveIndicator from "@/components/save-indicator";
+import { LockIcon, MuteIcon, PlusIcon, ScissorsIcon, TrackKindIcon, TrashIcon, UnlockIcon, VolumeIcon } from "@/components/icons";
 import MediaLibrary from "./media-library";
-import TimelineItemBlock from "./timeline-item-block";
+import TimelineItemBlock, { type ItemPatch } from "./timeline-item-block";
 import ExportPanel from "./export-panel";
 import ScenePreview from "./scene-preview";
 
-const PX_PER_SECOND = 60;
+const MIN_PX_PER_SECOND = 20;
+const MAX_PX_PER_SECOND = 200;
+const DEFAULT_PX_PER_SECOND = 60;
 const PLAYHEAD_SNAP_MS = 50;
 // Must match the track-row label column: w-32 (128px) + gap-2 (8px). The
 // ruler and playhead line sit in a separate DOM subtree from the lanes they
 // need to align with, so this offset has to be applied explicitly rather
 // than falling out of normal flex layout.
 const LABEL_COL_PX = 136;
-
-function msToPx(ms: number): number {
-  return (ms / 1000) * PX_PER_SECOND;
-}
 
 function trackEndMs(track: Track): number {
   return track.items.reduce((max, item) => Math.max(max, item.startMs + item.durationMs), 0);
@@ -60,6 +59,8 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
   const [armedMediaId, setArmedMediaId] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ trackId: string; itemId: string } | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
+  const [pxPerSecond, setPxPerSecond] = useState(DEFAULT_PX_PER_SECOND);
+  const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -78,6 +79,13 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
 
   const scene = scenes.find((s) => s.id === sceneId);
   const armedMedia = media.find((a) => a.id === armedMediaId) ?? null;
+
+  function msToPx(ms: number): number {
+    return (ms / 1000) * pxPerSecond;
+  }
+  function pxToMs(px: number): number {
+    return (px / pxPerSecond) * 1000;
+  }
 
   function updateScene(mutate: (scene: Scene) => Scene) {
     withScenes((prev) => prev.map((s) => (s.id === sceneId ? mutate(s) : s)));
@@ -113,6 +121,14 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     updateTrack(track.id, (t) => ({ ...t, items: [...t.items, item] }));
   }
 
+  function appendClipAt(track: Track, startMs: number) {
+    if (!armedMedia || track.locked || !trackAcceptsMediaKind(track.type, armedMedia.kind)) return;
+    const durationMs = defaultClipDurationMs(armedMedia.kind);
+    const item = newTimelineItem(armedMedia.id, track.type === "audio" ? "audio" : "clip", Math.max(0, startMs), durationMs);
+    updateTrack(track.id, (t) => ({ ...t, items: [...t.items, item] }));
+    setSelected({ trackId: track.id, itemId: item.id });
+  }
+
   function appendText(track: Track) {
     if (track.locked) return;
     const item = newTextItem(trackEndMs(track));
@@ -120,7 +136,7 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     setSelected({ trackId: track.id, itemId: item.id });
   }
 
-  function updateItem(trackId: string, itemId: string, patch: Partial<{ startMs: number; durationMs: number }>) {
+  function updateItem(trackId: string, itemId: string, patch: ItemPatch) {
     updateTrack(trackId, (t) => ({ ...t, items: t.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) }));
   }
 
@@ -166,8 +182,24 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
   function handleRulerClick(e: MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const rawMs = (x / PX_PER_SECOND) * 1000;
+    const rawMs = pxToMs(x);
     setPlayheadMs(Math.max(0, Math.round(rawMs / PLAYHEAD_SNAP_MS) * PLAYHEAD_SNAP_MS));
+  }
+
+  function handleLaneDrop(e: DragEvent<HTMLDivElement>, track: Track) {
+    e.preventDefault();
+    setDragOverTrackId(null);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rawMs = pxToMs(e.clientX - rect.left);
+    const startMs = Math.max(0, Math.round(rawMs / PLAYHEAD_SNAP_MS) * PLAYHEAD_SNAP_MS);
+    appendClipAt(track, startMs);
+  }
+
+  function handleLaneDragOver(e: DragEvent<HTMLDivElement>, track: Track) {
+    if (!armedMedia || track.locked || !trackAcceptsMediaKind(track.type, armedMedia.kind)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (dragOverTrackId !== track.id) setDragOverTrackId(track.id);
   }
 
   if (status !== "authenticated" || loading) {
@@ -208,7 +240,7 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
       : 0;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
+    <main className="mx-auto max-w-[1400px] px-6 py-8">
       <div className="flex items-center justify-between">
         <div>
           <Link href={`/dashboard/${projectId}/edit`} className="text-sm text-[var(--tm-text-dim)] underline underline-offset-2">
@@ -219,41 +251,76 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
         <SaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <div className="mt-6 grid grid-cols-[220px_1fr] gap-6">
-        <div>
-          <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Media library</h2>
-          <p className="mt-1 text-[11px] text-[var(--tm-text-dim)]">Click to select, then click a track to add it there.</p>
-          {mediaError && <p className="mt-2 text-xs text-red-400">{mediaError}</p>}
-          <div className="mt-2">
-            <MediaLibrary assets={media} armedId={armedMediaId} onArm={(a) => setArmedMediaId(a.id === armedMediaId ? null : a.id)} />
+      {/* Three-pane row: media bin | preview | inspector — the classic NLE layout */}
+      <div className="mt-6 grid grid-cols-[240px_1fr_260px] gap-4">
+        <div className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Media</h2>
+            <p className="mt-1 text-[11px] text-[var(--tm-text-dim)]">Drag a clip onto a track below — or click one, then click a track.</p>
+            {mediaError && <p className="mt-2 text-xs text-red-400">{mediaError}</p>}
+            <div className="mt-2">
+              <MediaLibrary
+                assets={media}
+                armedId={armedMediaId}
+                onArm={(a) => setArmedMediaId(a.id === armedMediaId ? null : a.id)}
+                onDragArm={(a) => setArmedMediaId(a.id)}
+              />
+            </div>
           </div>
 
-          <div className="mt-6 flex flex-col gap-2">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Tracks</h2>
-            <button
-              onClick={() => addTrack("video")}
-              className="rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
-            >
-              + Video track
-            </button>
-            <button
-              onClick={() => addTrack("audio")}
-              className="rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
-            >
-              + Audio track
-            </button>
-            <button
-              onClick={() => addTrack("text")}
-              className="rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
-            >
-              + Text track
-            </button>
+          <div>
+            <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Add track</h2>
+            <div className="mt-2 flex flex-col gap-1.5">
+              <button
+                onClick={() => addTrack("video")}
+                className="flex items-center gap-2 rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
+              >
+                <PlusIcon /> Video track
+              </button>
+              <button
+                onClick={() => addTrack("audio")}
+                className="flex items-center gap-2 rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
+              >
+                <PlusIcon /> Audio track
+              </button>
+              <button
+                onClick={() => addTrack("text")}
+                className="flex items-center gap-2 rounded-md border border-dashed border-[var(--tm-line)] px-3 py-1.5 text-left text-xs text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)]"
+              >
+                <PlusIcon /> Text track
+              </button>
+            </div>
           </div>
+
+          <ExportPanel projectId={projectId} sceneId={sceneId} />
+        </div>
+
+        <div className="min-w-0 flex justify-center">
+          <ScenePreview
+            scene={scene}
+            media={media}
+            aspectRatio={project.aspectRatio}
+            customWidth={project.customWidth}
+            customHeight={project.customHeight}
+            endMs={endMs}
+            playheadMs={playheadMs}
+            onPlayheadChange={setPlayheadMs}
+          />
+        </div>
+
+        <div className="rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3 text-xs">
+          <h2 className="font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">
+            {selectedItem ? `Selected ${selectedItem.type === "text" ? "text" : "clip"}` : "Properties"}
+          </h2>
+
+          {!selectedItem && (
+            <p className="mt-2 text-[11px] text-[var(--tm-text-dim)]">
+              Select a clip on the timeline to edit its timing and effects, or drag media from the left onto a track to add one.
+            </p>
+          )}
 
           {selectedItem && selectedTrack && (
-            <div className="mt-6 flex flex-col gap-2 rounded-md border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3 text-xs">
-              <h2 className="font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Selected {selectedItem.type === "text" ? "text" : "clip"}</h2>
-
+            <div className="mt-3 flex flex-col gap-2">
               {selectedItem.type === "text" && (
                 <>
                   <label className="flex flex-col gap-1">
@@ -349,139 +416,161 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                 <p className="text-[11px] text-[var(--tm-text-dim)]">
                   {selectedItemOverlapMs > 0
                     ? `Crossfades with the previous clip over the ${(selectedItemOverlapMs / 1000).toFixed(1)}s they overlap.`
-                    : "No transition — this clip doesn't overlap the previous one. Set Start (s) earlier to overlap it and create a crossfade."}
+                    : "No transition — this clip doesn't overlap the previous one. Drag its left edge over the previous clip to create a crossfade."}
                 </p>
               )}
-              {selectedItem.type !== "text" && (
+              <div className="mt-1 flex gap-2">
+                {selectedItem.type !== "text" && (
+                  <button
+                    onClick={() => splitAtPlayhead(selectedTrack.id, selectedItem)}
+                    disabled={playheadMs <= selectedItem.startMs || playheadMs >= selectedItem.startMs + selectedItem.durationMs}
+                    className="flex items-center gap-1.5 rounded-md border border-[var(--tm-line)] px-3 py-1.5 hover:border-[var(--tm-accent)] disabled:opacity-40"
+                  >
+                    <ScissorsIcon /> Split
+                  </button>
+                )}
                 <button
-                  onClick={() => splitAtPlayhead(selectedTrack.id, selectedItem)}
-                  disabled={playheadMs <= selectedItem.startMs || playheadMs >= selectedItem.startMs + selectedItem.durationMs}
-                  className="rounded-md border border-[var(--tm-line)] px-3 py-1.5 hover:border-[var(--tm-accent)] disabled:opacity-40"
+                  onClick={() => deleteItem(selectedTrack.id, selectedItem.id)}
+                  className="flex items-center gap-1.5 rounded-md border border-[var(--tm-line)] px-3 py-1.5 text-red-400 hover:border-red-400"
                 >
-                  Split at playhead
+                  <TrashIcon /> Delete
                 </button>
-              )}
-              <button
-                onClick={() => deleteItem(selectedTrack.id, selectedItem.id)}
-                className="rounded-md border border-[var(--tm-line)] px-3 py-1.5 text-red-400 hover:border-red-400"
-              >
-                Delete {selectedItem.type === "text" ? "text" : "clip"}
-              </button>
+              </div>
             </div>
           )}
-
-          <ExportPanel projectId={projectId} sceneId={sceneId} />
         </div>
+      </div>
 
-        <div className="min-w-0">
-          <ScenePreview
-            scene={scene}
-            media={media}
-            aspectRatio={project.aspectRatio}
-            customWidth={project.customWidth}
-            customHeight={project.customHeight}
-            endMs={endMs}
-            playheadMs={playheadMs}
-            onPlayheadChange={setPlayheadMs}
+      {/* Timeline spans the full width, under all three panes above — matches
+          how every mainstream NLE lays this out. */}
+      <div className="mt-4 flex items-center justify-between text-xs text-[var(--tm-text-dim)]">
+        <span>
+          Playhead: <span className="font-mono tabular-nums">{(playheadMs / 1000).toFixed(2)}s</span> · click the ruler to move it, drag a clip
+          to reposition or trim it.
+        </span>
+        <label className="flex items-center gap-2">
+          Zoom
+          <input
+            type="range"
+            min={MIN_PX_PER_SECOND}
+            max={MAX_PX_PER_SECOND}
+            value={pxPerSecond}
+            onChange={(e) => setPxPerSecond(Number(e.target.value))}
+            className="accent-[var(--tm-accent)]"
           />
+        </label>
+      </div>
 
-          <div className="mt-4 overflow-x-auto rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3">
-            <div style={{ width: Math.max(msToPx(endMs) + 40, 400) + LABEL_COL_PX }}>
-              <div className="flex gap-2">
-                <div className="w-32 shrink-0" />
-                <div
-                  onClick={handleRulerClick}
-                  className="relative h-6 cursor-pointer border-b border-[var(--tm-line)] text-[10px] text-[var(--tm-text-dim)]"
-                  style={{ width: Math.max(msToPx(endMs), 300) }}
-                >
-                  {Array.from({ length: Math.ceil(endMs / 1000) + 1 }, (_, s) => (
-                    <span key={s} className="absolute top-0" style={{ left: msToPx(s * 1000) }}>
-                      {s}s
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="relative mt-2 flex flex-col gap-2">
-                <div
-                  className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-[var(--tm-accent)]"
-                  style={{ left: LABEL_COL_PX + msToPx(playheadMs) }}
-                />
-
-                {scene.tracks.length === 0 && (
-                  <p className="py-6 text-center text-xs text-[var(--tm-text-dim)]">No tracks yet — add one on the left.</p>
-                )}
-
-                {scene.tracks.map((track) => {
-                  const isTextTrack = track.type === "text";
-                  const canDrop = !isTextTrack && Boolean(armedMedia) && !track.locked && trackAcceptsMediaKind(track.type, armedMedia?.kind ?? "");
-                  const canAddText = isTextTrack && !track.locked;
-                  const canAct = canDrop || canAddText;
-                  return (
-                    <div key={track.id} className="flex items-stretch gap-2">
-                      <div className="flex w-32 shrink-0 flex-col justify-center gap-1 text-[10px] text-[var(--tm-text-dim)]">
-                        <span className="uppercase tracking-wide">{track.type}</span>
-                        <div className="flex gap-2">
-                          <button onClick={() => toggleLock(track.id)} className={track.locked ? "text-[var(--tm-accent)]" : "hover:text-[var(--tm-text)]"}>
-                            {track.locked ? "Locked" : "Lock"}
-                          </button>
-                          <button onClick={() => toggleMute(track.id)} className={track.muted ? "text-[var(--tm-accent)]" : "hover:text-[var(--tm-text)]"}>
-                            {track.muted ? "Muted" : "Mute"}
-                          </button>
-                          <button onClick={() => removeTrack(track.id)} className="text-red-400 hover:text-red-300">
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-
-                      <div
-                        onClick={() => {
-                          if (canDrop) appendClip(track);
-                          else if (canAddText) appendText(track);
-                        }}
-                        role="button"
-                        tabIndex={canAct ? 0 : -1}
-                        onKeyDown={(e) => {
-                          if (!canAct || (e.key !== "Enter" && e.key !== " ")) return;
-                          if (canDrop) appendClip(track);
-                          else appendText(track);
-                        }}
-                        className={`relative h-10 flex-1 rounded border border-dashed border-[var(--tm-line)] bg-[var(--tm-bg)] ${canAct ? "cursor-pointer" : "cursor-default"}`}
-                        style={{ width: Math.max(msToPx(endMs), 300) }}
-                        title={
-                          isTextTrack
-                            ? track.locked
-                              ? "This track is locked"
-                              : "Click to add a text item"
-                            : armedMedia
-                              ? canDrop
-                                ? "Add selected media here"
-                                : "This track can't accept that media type"
-                              : "Select media on the left first"
-                        }
-                      >
-                        {track.items.map((item) => (
-                          <TimelineItemBlock
-                            key={item.id}
-                            item={item}
-                            media={item.type === "text" ? undefined : media.find((a) => a.id === item.mediaAssetId)}
-                            pxPerSecond={PX_PER_SECOND}
-                            selected={selected?.itemId === item.id}
-                            onSelect={() => setSelected({ trackId: track.id, itemId: item.id })}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+      <div className="mt-2 overflow-x-auto rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3">
+        <div style={{ width: Math.max(msToPx(endMs) + 40, 400) + LABEL_COL_PX }}>
+          <div className="flex gap-2">
+            <div className="w-32 shrink-0" />
+            <div
+              onClick={handleRulerClick}
+              className="relative h-6 cursor-pointer border-b border-[var(--tm-line)] text-[10px] text-[var(--tm-text-dim)]"
+              style={{ width: Math.max(msToPx(endMs), 300) }}
+            >
+              {Array.from({ length: Math.ceil(endMs / 1000) + 1 }, (_, s) => (
+                <span key={s} className="absolute top-0" style={{ left: msToPx(s * 1000) }}>
+                  {s}s
+                </span>
+              ))}
             </div>
           </div>
 
-          <p className="mt-3 text-xs text-[var(--tm-text-dim)]">
-            Playhead: {(playheadMs / 1000).toFixed(2)}s · click the ruler to move it, click a video/audio track lane to
-            append the selected media, click a text track lane to add a text item.
-          </p>
+          <div className="relative mt-2 flex flex-col gap-2">
+            <div
+              className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-[var(--tm-accent)]"
+              style={{ left: LABEL_COL_PX + msToPx(playheadMs) }}
+            />
+
+            {scene.tracks.length === 0 && (
+              <p className="py-6 text-center text-xs text-[var(--tm-text-dim)]">No tracks yet — add one on the left.</p>
+            )}
+
+            {scene.tracks.map((track) => {
+              const isTextTrack = track.type === "text";
+              const canDrop = !isTextTrack && Boolean(armedMedia) && !track.locked && trackAcceptsMediaKind(track.type, armedMedia?.kind ?? "");
+              const canAddText = isTextTrack && !track.locked;
+              const canAct = canDrop || canAddText;
+              return (
+                <div key={track.id} className="flex items-stretch gap-2">
+                  <div className="flex w-32 shrink-0 flex-col justify-center gap-1.5 text-[10px] text-[var(--tm-text-dim)]">
+                    <span className="flex items-center gap-1.5 uppercase tracking-wide">
+                      <TrackKindIcon kind={track.type === "audio" ? "audio" : track.type === "text" ? "text" : "video"} />
+                      {track.type}
+                    </span>
+                    <div className="flex gap-2.5">
+                      <button
+                        onClick={() => toggleLock(track.id)}
+                        title={track.locked ? "Locked — click to unlock" : "Click to lock"}
+                        className={track.locked ? "text-[var(--tm-accent)]" : "hover:text-[var(--tm-text)]"}
+                      >
+                        {track.locked ? <LockIcon /> : <UnlockIcon />}
+                      </button>
+                      {track.type !== "text" && (
+                        <button
+                          onClick={() => toggleMute(track.id)}
+                          title={track.muted ? "Muted — click to unmute" : "Click to mute"}
+                          className={track.muted ? "text-[var(--tm-accent)]" : "hover:text-[var(--tm-text)]"}
+                        >
+                          {track.muted ? <MuteIcon /> : <VolumeIcon />}
+                        </button>
+                      )}
+                      <button onClick={() => removeTrack(track.id)} title="Remove track" className="text-red-400 hover:text-red-300">
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      if (canDrop) appendClip(track);
+                      else if (canAddText) appendText(track);
+                    }}
+                    onDragOver={(e) => handleLaneDragOver(e, track)}
+                    onDragLeave={() => setDragOverTrackId((id) => (id === track.id ? null : id))}
+                    onDrop={(e) => handleLaneDrop(e, track)}
+                    role="button"
+                    tabIndex={canAct ? 0 : -1}
+                    onKeyDown={(e) => {
+                      if (!canAct || (e.key !== "Enter" && e.key !== " ")) return;
+                      if (canDrop) appendClip(track);
+                      else appendText(track);
+                    }}
+                    className={`relative h-10 flex-1 rounded border border-dashed bg-[var(--tm-bg)] ${
+                      dragOverTrackId === track.id ? "border-[var(--tm-accent)] bg-[var(--tm-accent)]/10" : "border-[var(--tm-line)]"
+                    } ${canAct ? "cursor-pointer" : "cursor-default"}`}
+                    style={{ width: Math.max(msToPx(endMs), 300) }}
+                    title={
+                      isTextTrack
+                        ? track.locked
+                          ? "This track is locked"
+                          : "Click to add a text item"
+                        : armedMedia
+                          ? canDrop
+                            ? "Drop or click to add selected media here"
+                            : "This track can't accept that media type"
+                          : "Select media on the left first"
+                    }
+                  >
+                    {track.items.map((item) => (
+                      <TimelineItemBlock
+                        key={item.id}
+                        item={item}
+                        media={item.type === "text" ? undefined : media.find((a) => a.id === item.mediaAssetId)}
+                        pxPerSecond={pxPerSecond}
+                        selected={selected?.itemId === item.id}
+                        locked={track.locked}
+                        onSelect={() => setSelected({ trackId: track.id, itemId: item.id })}
+                        onUpdate={(patch) => updateItem(track.id, item.id, patch)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </main>

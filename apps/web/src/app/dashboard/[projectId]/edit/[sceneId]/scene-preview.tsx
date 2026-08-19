@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { AspectRatio, MediaAsset } from "@/lib/projects-api";
 import type { MediaTimelineItem, Scene, TextTimelineItem, Track, Transform } from "@/lib/composition-api";
+import { PauseIcon, PlayIcon } from "@/components/icons";
 
 const ASPECT_RATIOS: Record<AspectRatio, [number, number]> = {
   RATIO_16_9: [16, 9],
@@ -325,13 +326,17 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     rafRef.current = requestAnimationFrame(tick);
   }
 
+  function stopPlayback() {
+    playingRef.current = false;
+    setPlaying(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    pauseAllVideo();
+    pauseAllAudio();
+  }
+
   function handlePlayPause() {
     if (playingRef.current) {
-      playingRef.current = false;
-      setPlaying(false);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      pauseAllVideo();
-      pauseAllAudio();
+      stopPlayback();
       render(playheadMs);
       return;
     }
@@ -341,6 +346,32 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     playingRef.current = true;
     setPlaying(true);
     rafRef.current = requestAnimationFrame(tick);
+  }
+
+  const scrubDraggingRef = useRef(false);
+
+  function seekFromClientX(barEl: HTMLDivElement, clientX: number) {
+    const rect = barEl.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    onPlayheadChange(Math.round(ratio * endMs));
+  }
+
+  function handleScrubPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (playingRef.current) stopPlayback();
+    const barEl = e.currentTarget;
+    scrubDraggingRef.current = true;
+    seekFromClientX(barEl, e.clientX);
+
+    function onMove(ev: PointerEvent) {
+      if (!scrubDraggingRef.current) return;
+      seekFromClientX(barEl, ev.clientX);
+    }
+    function onUp() {
+      scrubDraggingRef.current = false;
+      window.removeEventListener("pointermove", onMove);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
   }
 
   // Scrubbing while paused (ruler click, split, load) redraws immediately.
@@ -365,17 +396,33 @@ export default function ScenePreview({ scene, media, aspectRatio, customWidth, c
     };
   }, []);
 
+  const progressRatio = endMs > 0 ? Math.min(1, playheadMs / endMs) : 0;
+
   return (
     <div className="flex flex-col items-center gap-2 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3">
       <canvas ref={canvasRef} width={dims.width} height={dims.height} className="rounded bg-black" style={{ width: dims.width, height: dims.height }} />
+
+      <div onPointerDown={handleScrubPointerDown} className="group relative h-3 w-full cursor-pointer" style={{ width: dims.width }}>
+        <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-[var(--tm-line)]" />
+        <div
+          className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-[var(--tm-accent)]"
+          style={{ width: `${progressRatio * 100}%` }}
+        />
+        <div
+          className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--tm-accent)] shadow transition-transform group-hover:scale-125"
+          style={{ left: `${progressRatio * 100}%` }}
+        />
+      </div>
+
       <div className="flex w-full items-center justify-between text-xs text-[var(--tm-text-dim)]">
         <button
           onClick={handlePlayPause}
-          className="rounded-md border border-[var(--tm-line)] px-3 py-1 font-medium text-[var(--tm-text)] hover:border-[var(--tm-accent)]"
+          aria-label={playing ? "Pause" : "Play"}
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--tm-line)] text-[var(--tm-text)] hover:border-[var(--tm-accent)]"
         >
-          {playing ? "Pause" : "Play"}
+          {playing ? <PauseIcon /> : <PlayIcon />}
         </button>
-        <span>
+        <span className="font-mono tabular-nums">
           {formatTime(playheadMs)} / {formatTime(endMs)}
         </span>
       </div>
