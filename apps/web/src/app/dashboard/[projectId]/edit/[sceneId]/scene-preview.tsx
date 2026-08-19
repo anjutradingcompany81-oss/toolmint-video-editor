@@ -185,7 +185,13 @@ function ScenePreview(
   // Drives one video/audio element's seek+play state, shared by the video
   // and audio branches of render(). `wasActive` distinguishes "already
   // playing, only correct drift" from "just became active, do a hard seek".
-  function driveElement(el: HTMLVideoElement | HTMLAudioElement, targetTimeS: number, wasActive: boolean) {
+  // `rate` sets native playbackRate so continuous playback (not just the
+  // periodic drift-correction reseek) actually advances at the clip's
+  // speedPercent — without it the element would silently play at 1x while
+  // our own clock assumes it's moving faster/slower, and drift correction
+  // would fight it every ~0.3s instead of tracking smoothly.
+  function driveElement(el: HTMLVideoElement | HTMLAudioElement, targetTimeS: number, wasActive: boolean, rate: number) {
+    if (el.playbackRate !== rate) el.playbackRate = rate;
     if (playingRef.current) {
       if (!wasActive) {
         el.currentTime = targetTimeS;
@@ -276,8 +282,9 @@ function ScenePreview(
       if (asset.kind === "VIDEO") {
         const el = getVideoEl(asset);
         activeVideoAssetIds.add(asset.id);
-        const targetTime = (ms - item.startMs + item.trimInMs) / 1000;
-        driveElement(el, targetTime, activeVideoItemIdsRef.current.has(item.id));
+        const rate = item.speedPercent / 100;
+        const targetTime = (item.trimInMs + (ms - item.startMs) * rate) / 1000;
+        driveElement(el, targetTime, activeVideoItemIdsRef.current.has(item.id), rate);
         videoLayers.push({ el, naturalW: el.videoWidth, naturalH: el.videoHeight, transform: item.transform, alpha });
       } else if (asset.kind === "IMAGE") {
         const el = getImageEl(asset);
@@ -307,8 +314,9 @@ function ScenePreview(
       }
       el.volume = volume;
 
-      const targetTime = (ms - item.startMs + item.trimInMs) / 1000;
-      driveElement(el, targetTime, activeAudioItemIdsRef.current.has(item.id));
+      const rate = item.speedPercent / 100;
+      const targetTime = (item.trimInMs + (ms - item.startMs) * rate) / 1000;
+      driveElement(el, targetTime, activeAudioItemIdsRef.current.has(item.id), rate);
     });
 
     audioElsRef.current.forEach((el, assetId) => {

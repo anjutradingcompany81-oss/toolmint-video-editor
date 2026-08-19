@@ -63,6 +63,12 @@ export default function TimelineItemBlock({ item, media, pxPerSecond, selected, 
     const isMedia = start.type !== "text";
     const trimInMs = isMedia ? (start as Extract<TimelineItem, { trimInMs: number }>).trimInMs : 0;
     const trimOutMs = isMedia ? (start as Extract<TimelineItem, { trimOutMs: number }>).trimOutMs : 0;
+    // durationMs is always the *timeline* footprint; a clip playing at
+    // speedPercent != 100 consumes durationMs * speedRate of source time.
+    // Every trim-drag conversion below goes through this rate to translate
+    // a timeline-ms pointer delta into the source-ms delta trimIn/trimOut
+    // actually track.
+    const speedRate = isMedia ? (start as Extract<TimelineItem, { speedPercent: number }>).speedPercent / 100 : 1;
 
     if (drag.mode === "move") {
       onUpdate({ startMs: Math.max(0, snap(start.startMs + deltaMs)) });
@@ -79,10 +85,10 @@ export default function TimelineItemBlock({ item, media, pxPerSecond, selected, 
         // clip was placed shorter than its full source (e.g. the 5s default
         // clip length from a 6s source video).
         const sourceTotalMs = media.durationMs;
-        const maxDurationMs = Math.max(MIN_DURATION_MS, sourceTotalMs - trimInMs);
+        const maxDurationMs = Math.max(MIN_DURATION_MS, (sourceTotalMs - trimInMs) / speedRate);
         newDurationMs = Math.min(newDurationMs, maxDurationMs);
         patch.durationMs = newDurationMs;
-        patch.trimOutMs = Math.max(0, sourceTotalMs - trimInMs - newDurationMs);
+        patch.trimOutMs = Math.max(0, sourceTotalMs - trimInMs - newDurationMs * speedRate);
       }
       onUpdate(patch);
       return;
@@ -91,12 +97,12 @@ export default function TimelineItemBlock({ item, media, pxPerSecond, selected, 
     // trim-left: the right edge (end time) stays fixed — start moves, and
     // duration/trimIn absorb the difference, mirroring how splitAtPlayhead
     // computes the right-hand half of a split.
-    const lowerBound = Math.max(0, isMedia ? start.startMs - trimInMs : 0);
+    const lowerBound = Math.max(0, isMedia ? start.startMs - trimInMs / speedRate : 0);
     const upperBound = start.startMs + start.durationMs - MIN_DURATION_MS;
     const newStartMs = snap(Math.min(upperBound, Math.max(lowerBound, start.startMs + deltaMs)));
     const applied = newStartMs - start.startMs;
     const patch: ItemPatch = { startMs: newStartMs, durationMs: start.durationMs - applied };
-    if (isMedia) patch.trimInMs = Math.max(0, trimInMs + applied);
+    if (isMedia) patch.trimInMs = Math.max(0, trimInMs + applied * speedRate);
     onUpdate(patch);
   }
 
@@ -130,10 +136,16 @@ export default function TimelineItemBlock({ item, media, pxPerSecond, selected, 
           sourceDurationMs={media.durationMs}
           trimInMs={item.trimInMs}
           durationMs={item.durationMs}
+          speedPercent={item.speedPercent}
           className="pointer-events-none absolute inset-x-0 bottom-0 top-4 opacity-80"
         />
       )}
-      <span className="pointer-events-none relative block truncate px-2 leading-[2rem]">{label}</span>
+      <span className="pointer-events-none relative flex items-center gap-1 truncate px-2 leading-[2rem]">
+        {label}
+        {item.type !== "text" && item.speedPercent !== 100 && (
+          <span className="shrink-0 rounded bg-black/50 px-1 text-[9px] font-semibold">{item.speedPercent}%</span>
+        )}
+      </span>
 
       {!locked && (
         <>

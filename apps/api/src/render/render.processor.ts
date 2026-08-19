@@ -74,6 +74,7 @@ export class RenderProcessor implements OnModuleDestroy {
           kind: asset.kind === "IMAGE" ? "image" : "video",
           trimInMs: item.trimInMs,
           durationMs: item.durationMs,
+          speedPercent: item.speedPercent,
           transitionInMs: this.overlapWithPrevious(sortedVideoItems, index),
           transitionType: item.transitionIn,
         });
@@ -90,6 +91,7 @@ export class RenderProcessor implements OnModuleDestroy {
           localPath,
           trimInMs: item.trimInMs,
           durationMs: item.durationMs,
+          speedPercent: item.speedPercent,
           transitionInMs: this.overlapWithPrevious(sortedAudioItems, index),
         });
       }

@@ -16,18 +16,23 @@ interface WaveformProps {
   sourceDurationMs: number | null;
   trimInMs: number;
   durationMs: number;
+  // A clip playing faster/slower than 100% consumes durationMs*speedRate of
+  // source time, not durationMs — matters here because the visible slice of
+  // the source waveform has to match what's actually being played back.
+  speedPercent?: number;
   className?: string;
 }
 
-export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs, className }: WaveformProps) {
+export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs, speedPercent = 100, className }: WaveformProps) {
   const path = useMemo(() => {
     const bucketCount = peaks.length / 2;
     let visible = peaks;
+    const sourceSpanMs = durationMs * (speedPercent / 100);
 
     if (sourceDurationMs && sourceDurationMs > 0) {
       const bucketMs = sourceDurationMs / bucketCount;
       const startBucket = Math.max(0, Math.floor(trimInMs / bucketMs));
-      const endBucket = Math.min(bucketCount, Math.ceil((trimInMs + durationMs) / bucketMs));
+      const endBucket = Math.min(bucketCount, Math.ceil((trimInMs + sourceSpanMs) / bucketMs));
       visible = peaks.slice(startBucket * 2, Math.max(startBucket * 2 + 2, endBucket * 2));
     }
 
@@ -44,7 +49,7 @@ export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs
       bottom.push(`${x.toFixed(1)},${(MID - min * MID).toFixed(1)}`);
     }
     return `M ${top.join(" L ")} L ${bottom.reverse().join(" L ")} Z`;
-  }, [peaks, sourceDurationMs, trimInMs, durationMs]);
+  }, [peaks, sourceDurationMs, trimInMs, durationMs, speedPercent]);
 
   if (!path) return null;
 

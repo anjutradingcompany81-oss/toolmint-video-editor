@@ -79,7 +79,15 @@ export interface VideoSegment {
   localPath: string;
   kind: "video" | "image";
   trimInMs: number;
+  // Timeline footprint — same convention as the editor's own
+  // MediaTimelineItem.durationMs, i.e. *not* how much source is consumed
+  // when speedPercent != 100 (that's durationMs * speedPercent/100,
+  // computed internally for the trim filter; everything else here —
+  // transition offsets, output length — is timeline time).
   durationMs: number;
+  // 100 = normal speed. Only meaningful for kind: "video" — a still image
+  // has no inherent playback rate to change.
+  speedPercent: number;
   // How much this segment overlaps the previous one — 0 means a hard cut.
   // Meaningless (ignored) on the first segment, which has no predecessor.
   transitionInMs: number;
@@ -90,6 +98,7 @@ export interface AudioSegment {
   localPath: string;
   trimInMs: number;
   durationMs: number;
+  speedPercent: number;
   transitionInMs: number;
 }
 
@@ -122,6 +131,30 @@ export interface RenderPlan {
 
 function sec(ms: number): string {
   return (ms / 1000).toFixed(3);
+}
+
+function rateStr(speedPercent: number): string {
+  return (speedPercent / 100).toFixed(4);
+}
+
+// atempo only accepts 0.5-2.0 per instance — outside that range (this app
+// allows 25%-400%) it has to be chained, e.g. 4x = atempo=2,atempo=2. Splits
+// into equal factors so each stage stays comfortably in-range rather than
+// pushing one stage to the boundary.
+function buildAtempoChain(rate: number): string {
+  if (rate >= 0.5 && rate <= 2.0) return `atempo=${rate.toFixed(4)}`;
+  const stages: number[] = [];
+  let remaining = rate;
+  while (remaining > 2.0) {
+    stages.push(2.0);
+    remaining /= 2.0;
+  }
+  while (remaining < 0.5) {
+    stages.push(0.5);
+    remaining /= 0.5;
+  }
+  stages.push(remaining);
+  return stages.map((s) => `atempo=${s.toFixed(4)}`).join(",");
 }
 
 // ffmpeg's filtergraph parser treats ':' as an option separator and '\' as
@@ -160,8 +193,15 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
   // produces "vout".
   const videoLabels = plan.video.map((_, i) => (plan.video.length === 1 ? "vout" : `v${i}`));
   plan.video.forEach((seg, i) => {
+    // Speed only applies to real video — a still image has no motion to
+    // speed up, and durationMs there is already the input's own generated
+    // length (see the -loop/-t input args above), so trimming/stretching it
+    // again would be meaningless.
+    const speedRate = seg.kind === "video" ? seg.speedPercent / 100 : 1;
+    const sourceDurationMs = seg.durationMs * speedRate;
+    const ptsExpr = speedRate === 1 ? "PTS-STARTPTS" : `(PTS-STARTPTS)/${rateStr(seg.speedPercent)}`;
     filterParts.push(
-      `[${i}:v]trim=start=${sec(seg.trimInMs)}:duration=${sec(seg.durationMs)},setpts=PTS-STARTPTS,` +
+      `[${i}:v]trim=start=${sec(seg.trimInMs)}:duration=${sec(sourceDurationMs)},setpts=${ptsExpr},` +
         `scale=${plan.width}:${plan.height}:force_original_aspect_ratio=decrease,` +
         `pad=${plan.width}:${plan.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${plan.fps}[${videoLabels[i]}]`,
     );
@@ -214,7 +254,12 @@ export function buildFfmpegArgs(plan: RenderPlan): string[] {
   const audioInputOffset = plan.video.length;
   plan.audio.forEach((seg, i) => {
     const inputIndex = audioInputOffset + i;
-    filterParts.push(`[${inputIndex}:a]atrim=start=${sec(seg.trimInMs)}:duration=${sec(seg.durationMs)},asetpts=PTS-STARTPTS[${audioLabels[i]}]`);
+    const speedRate = seg.speedPercent / 100;
+    const sourceDurationMs = seg.durationMs * speedRate;
+    const tempo = speedRate === 1 ? "" : `,${buildAtempoChain(speedRate)}`;
+    filterParts.push(
+      `[${inputIndex}:a]atrim=start=${sec(seg.trimInMs)}:duration=${sec(sourceDurationMs)},asetpts=PTS-STARTPTS${tempo}[${audioLabels[i]}]`,
+    );
   });
 
   if (plan.audio.length > 1) {

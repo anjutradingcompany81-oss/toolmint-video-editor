@@ -31,6 +31,13 @@ const mediaItemFields = {
   trimInMs: z.number().int().nonnegative().default(0),
   trimOutMs: z.number().int().nonnegative().default(0),
   transitionIn: transitionTypeSchema.default("fade"),
+  // 100 = normal speed. durationMs always stays the *timeline* footprint
+  // (every other place that reads it — contiguity checks, isActive,
+  // transition offset math — needs that, unchanged); the amount of source
+  // consumed is durationMs * speedPercent/100, computed where needed rather
+  // than stored, so trimIn/trimOut keep meaning "source offsets" exactly as
+  // they did before speed existed.
+  speedPercent: z.number().int().min(25).max(400).default(100),
 };
 
 const clipItemSchema = z.object({ ...timelineItemBase, type: z.literal("clip"), ...mediaItemFields });

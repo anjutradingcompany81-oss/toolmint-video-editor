@@ -94,7 +94,7 @@ describe("buildFfmpegArgs", () => {
 
   it("builds a single-clip, video-only command", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [],
       width: 1280,
@@ -113,9 +113,123 @@ describe("buildFfmpegArgs", () => {
     expect(args[filterIndex + 1]).not.toContain("concat");
   });
 
+  it("doubles the trim length and halves setpts for a 200% speed video clip", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 1000, durationMs: 2000, speedPercent: 200, transitionInMs: 0, transitionType: "fade" }],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    // durationMs (2000ms) is the *timeline* footprint; at 2x speed that
+    // plays through 4000ms of source, which the trim step must consume —
+    // then setpts halves the timestamps back down to the 2000ms footprint.
+    expect(filter).toContain("trim=start=1.000:duration=4.000");
+    expect(filter).toContain("setpts=(PTS-STARTPTS)/2.0000");
+  });
+
+  it("stretches the trim length and doubles setpts for a 50% speed (slow-motion) video clip", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 4000, speedPercent: 50, transitionInMs: 0, transitionType: "fade" }],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("trim=start=0.000:duration=2.000");
+    expect(filter).toContain("setpts=(PTS-STARTPTS)/0.5000");
+  });
+
+  it("doesn't touch setpts at all for a normal-speed (100%) clip", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 2000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("setpts=PTS-STARTPTS,");
+    expect(filter).not.toContain("setpts=(PTS-STARTPTS)/");
+  });
+
+  it("never applies speed to a still image, even if speedPercent were somehow non-100", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000, speedPercent: 200, transitionInMs: 0, transitionType: "fade" }],
+      audio: [],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("trim=start=0.000:duration=3.000");
+    expect(filter).toContain("setpts=PTS-STARTPTS,");
+  });
+
+  it("adds a single atempo stage within ffmpeg's native 0.5-2.0 range", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 1000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
+      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 2000, speedPercent: 150, transitionInMs: 0 }],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    // durationMs (2000ms timeline) * 1.5 speed = 3000ms of source consumed.
+    expect(filter).toContain("atrim=start=0.000:duration=3.000");
+    expect(filter).toContain("atempo=1.5000");
+  });
+
+  it("chains two atempo stages for a 400% audio speed, since a single stage tops out at 2.0", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 1000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
+      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 4000, speedPercent: 400, transitionInMs: 0 }],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("atempo=2.0000,atempo=2.0000");
+  });
+
+  it("chains two atempo stages for a 25% audio speed, since a single stage bottoms out at 0.5", () => {
+    const args = buildFfmpegArgs({
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 1000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
+      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 4000, speedPercent: 25, transitionInMs: 0 }],
+      text: [],
+      width: 1280,
+      height: 720,
+      fps: 30,
+      outputPath: "out.mp4",
+    });
+
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("atempo=0.5000,atempo=0.5000");
+  });
+
   it("loops still images at the input level instead of trimming them", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "photo.jpg", kind: "image", trimInMs: 0, durationMs: 3000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [],
       width: 1280,
@@ -130,10 +244,10 @@ describe("buildFfmpegArgs", () => {
   it("concatenates multiple hard-cut clips in order and mixes in a single audio track (no pointless concat for one segment)", () => {
     const args = buildFfmpegArgs({
       video: [
-        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 2000, transitionInMs: 0, transitionType: "fade" },
-        { localPath: "b.mp4", kind: "video", trimInMs: 1000, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 2000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 1000, durationMs: 3000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" },
       ],
-      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 5000, transitionInMs: 0 }],
+      audio: [{ localPath: "music.mp3", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0 }],
       text: [],
       width: 1920,
       height: 1080,
@@ -152,10 +266,10 @@ describe("buildFfmpegArgs", () => {
 
   it("concatenates three hard-cut audio segments (no transitions)", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [
-        { localPath: "a.mp3", trimInMs: 0, durationMs: 2000, transitionInMs: 0 },
-        { localPath: "b.mp3", trimInMs: 0, durationMs: 2000, transitionInMs: 0 },
+        { localPath: "a.mp3", trimInMs: 0, durationMs: 2000, speedPercent: 100, transitionInMs: 0 },
+        { localPath: "b.mp3", trimInMs: 0, durationMs: 2000, speedPercent: 100, transitionInMs: 0 },
       ],
       text: [],
       width: 1280,
@@ -172,8 +286,8 @@ describe("buildFfmpegArgs", () => {
   it("chains an xfade instead of concat when a video segment declares a transition", () => {
     const args = buildFfmpegArgs({
       video: [
-        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
-        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, transitionInMs: 1000, transitionType: "wipeleft" },
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, speedPercent: 100, transitionInMs: 1000, transitionType: "wipeleft" },
       ],
       audio: [],
       text: [],
@@ -194,9 +308,9 @@ describe("buildFfmpegArgs", () => {
   it("chains xfade offsets cumulatively across three clips with two transitions", () => {
     const args = buildFfmpegArgs({
       video: [
-        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, transitionInMs: 0, transitionType: "fade" },
-        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, transitionInMs: 1000, transitionType: "fade" },
-        { localPath: "c.mp4", kind: "video", trimInMs: 0, durationMs: 2000, transitionInMs: 500, transitionType: "fade" },
+        { localPath: "a.mp4", kind: "video", trimInMs: 0, durationMs: 3000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" },
+        { localPath: "b.mp4", kind: "video", trimInMs: 0, durationMs: 4000, speedPercent: 100, transitionInMs: 1000, transitionType: "fade" },
+        { localPath: "c.mp4", kind: "video", trimInMs: 0, durationMs: 2000, speedPercent: 100, transitionInMs: 500, transitionType: "fade" },
       ],
       audio: [],
       text: [],
@@ -216,10 +330,10 @@ describe("buildFfmpegArgs", () => {
 
   it("chains an acrossfade instead of concat when an audio segment declares a transition", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [
-        { localPath: "a.mp3", trimInMs: 0, durationMs: 3000, transitionInMs: 0 },
-        { localPath: "b.mp3", trimInMs: 0, durationMs: 3000, transitionInMs: 800 },
+        { localPath: "a.mp3", trimInMs: 0, durationMs: 3000, speedPercent: 100, transitionInMs: 0 },
+        { localPath: "b.mp3", trimInMs: 0, durationMs: 3000, speedPercent: 100, transitionInMs: 800 },
       ],
       text: [],
       width: 1280,
@@ -236,7 +350,7 @@ describe("buildFfmpegArgs", () => {
 
   it("chains a drawtext filter for a text overlay and maps its output instead of [vout]", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [{ textFilePath: "text0.txt", startMs: 1000, durationMs: 2000, fontSize: 48, color: "#ffcc00", x: 10, y: -20, opacity: 0.5 }],
       width: 1280,
@@ -260,7 +374,7 @@ describe("buildFfmpegArgs", () => {
 
   it("chains multiple text overlays in order, each feeding the next", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [
         { textFilePath: "text0.txt", startMs: 0, durationMs: 2000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 },
@@ -282,7 +396,7 @@ describe("buildFfmpegArgs", () => {
 
   it("escapes a Windows-style font/text path so the colon and backslashes don't break filter parsing", () => {
     const args = buildFfmpegArgs({
-      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, transitionInMs: 0, transitionType: "fade" }],
+      video: [{ localPath: "clip.mp4", kind: "video", trimInMs: 0, durationMs: 5000, speedPercent: 100, transitionInMs: 0, transitionType: "fade" }],
       audio: [],
       text: [{ textFilePath: "C:\\Users\\me\\AppData\\text0.txt", startMs: 0, durationMs: 1000, fontSize: 40, color: "#ffffff", x: 0, y: 0, opacity: 1 }],
       width: 1280,

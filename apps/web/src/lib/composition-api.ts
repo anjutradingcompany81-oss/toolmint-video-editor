@@ -34,6 +34,9 @@ export interface MediaTimelineItem {
   // README's "Transitions" section.
   transitionIn: TransitionType;
   transform: Transform;
+  // 100 = normal speed. durationMs always stays the timeline footprint;
+  // the amount of source consumed is durationMs * speedPercent/100.
+  speedPercent: number;
 }
 
 // No mediaAssetId — content/style live on the item itself. Rotation is
@@ -119,6 +122,7 @@ export function newTimelineItem(mediaAssetId: string, type: "clip" | "audio", st
     trimOutMs: 0,
     transitionIn: "fade",
     transform: defaultTransform(),
+    speedPercent: 100,
   };
 }
 

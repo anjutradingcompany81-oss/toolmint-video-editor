@@ -207,6 +207,20 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     updateTrack(trackId, (t) => ({ ...t, items: t.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) }));
   }
 
+  // Changing speed keeps the *selected source range* fixed (trimIn/trimOut
+  // untouched) and resizes the timeline footprint to match — e.g. doubling
+  // speed halves durationMs, so the same source content now plays in half
+  // the time. This is the one place speedPercent changes outside a drag, so
+  // it's kept separate from the generic updateItem/ItemPatch path.
+  function updateSpeed(trackId: string, item: MediaTimelineItem, newSpeedPercent: number) {
+    const oldSourceSpanMs = item.durationMs * (item.speedPercent / 100);
+    const newDurationMs = Math.max(200, Math.round(oldSourceSpanMs / (newSpeedPercent / 100)));
+    updateTrack(trackId, (t) => ({
+      ...t,
+      items: t.items.map((i) => (i.id === item.id ? { ...i, speedPercent: newSpeedPercent, durationMs: newDurationMs } : i)),
+    }));
+  }
+
   function updateTextItem(trackId: string, itemId: string, patch: Partial<Pick<TextTimelineItem, "content" | "fontSize" | "color">>) {
     updateTrack(trackId, (t) => ({
       ...t,
@@ -234,13 +248,17 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
     if (playheadMs <= item.startMs || playheadMs >= item.startMs + item.durationMs) return;
     const leftDuration = playheadMs - item.startMs;
     const rightDuration = item.startMs + item.durationMs - playheadMs;
-    const left: MediaTimelineItem = { ...item, durationMs: leftDuration, trimOutMs: item.trimOutMs + rightDuration };
+    // durationMs is timeline time; trimIn/trimOut track source time, so a
+    // split has to convert the timeline-ms split point through speedPercent
+    // to know how much *source* each half's trim absorbs.
+    const speedRate = item.speedPercent / 100;
+    const left: MediaTimelineItem = { ...item, durationMs: leftDuration, trimOutMs: item.trimOutMs + rightDuration * speedRate };
     const right: MediaTimelineItem = {
       ...item,
       id: `${item.id}_split_${Math.random().toString(36).slice(2, 8)}`,
       startMs: playheadMs,
       durationMs: rightDuration,
-      trimInMs: item.trimInMs + leftDuration,
+      trimInMs: item.trimInMs + leftDuration * speedRate,
     };
     updateTrack(trackId, (t) => ({ ...t, items: t.items.flatMap((i) => (i.id === item.id ? [left, right] : [i])) }));
     setSelected(null);
@@ -484,6 +502,25 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
                   }}
                 />
               </label>
+              {selectedItem.type !== "text" && (
+                <label className="flex items-center justify-between gap-2">
+                  Speed (%)
+                  <input
+                    type="number"
+                    min="25"
+                    max="400"
+                    step="5"
+                    className="w-20 rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1"
+                    value={selectedItem.speedPercent}
+                    onChange={(e) => {
+                      const percent = Math.round(Number(e.target.value));
+                      if (Number.isFinite(percent) && percent >= 25 && percent <= 400) {
+                        updateSpeed(selectedTrack.id, selectedItem, percent);
+                      }
+                    }}
+                  />
+                </label>
+              )}
               {selectedItem.type !== "text" && (
                 <label className="flex items-center justify-between gap-2">
                   Transition in
