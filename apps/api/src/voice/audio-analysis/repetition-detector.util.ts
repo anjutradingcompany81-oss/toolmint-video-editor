@@ -78,6 +78,22 @@ function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+// Common short words ("hai", "and", "ki", "the"...) recur constantly in
+// ordinary speech — a match window as wide as the configured maxGapMs
+// (up to 30s on HIGH sensitivity) turns nearly every reuse of a filler
+// word across a whole scene into a flagged "repetition", flooding the
+// review panel with non-mistakes. A real accidental duplicate — a
+// stutter or an editor replaying a line — sits right next to its
+// original; the longer a *short* phrase's natural recurrence gap gets,
+// the less likely it's a mistake and the more likely it's just how
+// people talk. Longer phrases/sentences are inherently unlikely to recur
+// by coincidence, so they keep the full configured gap.
+function effectiveMaxGapMs(words: number, configuredMaxGapMs: number): number {
+  if (words <= 1) return Math.min(configuredMaxGapMs, 2000);
+  if (words <= 4) return Math.min(configuredMaxGapMs, 6000);
+  return configuredMaxGapMs;
+}
+
 function classifyKind(a: TranscriptSegment, b: TranscriptSegment, gapMs: number, audioSimilarity: number): RepetitionKind {
   const overlaps = a.trackId === b.trackId ? Math.max(a.startMs, b.startMs) < Math.min(a.endMs, b.endMs) : false;
   if (overlaps) return "CLIP_OVERLAP";
@@ -141,6 +157,7 @@ export function detectRepetitions(segments: TranscriptSegment[], thresholds: Sen
   for (let i = 0; i < ordered.length; i++) {
     const a = ordered[i];
     if (a.endMs - a.startMs < thresholds.minSegmentDurationMs) continue;
+    const tightGapMs = effectiveMaxGapMs(wordCount(a.text), thresholds.maxGapMs);
 
     for (let j = i + 1; j < ordered.length; j++) {
       const b = ordered[j];
@@ -159,6 +176,15 @@ export function detectRepetitions(segments: TranscriptSegment[], thresholds: Sen
 
       const audioSim = Math.max(0, Math.min(1, (cosine(a.audioFingerprint, b.audioFingerprint) + 1) / 2));
       if (audioSim * 100 < thresholds.audioSimilarityPct) continue;
+
+      // A short word/phrase recurring beyond its tight gap is almost
+      // always ordinary speech reusing a common word, not a mistake —
+      // unless the audio itself is a near-perfect match (literally the
+      // same samples), which only a genuine render/clip-duplication bug
+      // produces. Longer phrases/sentences aren't gated here; coincidental
+      // reuse of a whole sentence is rare enough to trust transcript+audio
+      // similarity alone.
+      if (gapMs > tightGapMs && audioSim < 0.97) continue;
 
       const waveformSim = cosine(a.waveformEnvelope, b.waveformEnvelope);
 
@@ -203,5 +229,72 @@ export function detectRepetitions(segments: TranscriptSegment[], thresholds: Sen
     }
   }
 
-  return candidates;
+  return collapseChains(dedupeToNearestOriginal(candidates));
+}
+
+// The pairwise scan above can report the same "repeated" segment against
+// several earlier occurrences at once (e.g. a phrase said 3 times gives a
+// segment-3-vs-1 candidate *and* a segment-3-vs-2 candidate) — keeping
+// only the nearest original per repeated segment collapses that back down
+// to one candidate per actual repeat, the same way a person would describe
+// it ("this line repeats", not "this line relates to 3 other lines").
+function dedupeToNearestOriginal(candidates: RepetitionCandidate[]): RepetitionCandidate[] {
+  const bestByRepeatedId = new Map<string, RepetitionCandidate>();
+  for (const c of candidates) {
+    const existing = bestByRepeatedId.get(c.repeated.id);
+    if (!existing || c.timingGapMs < existing.timingGapMs) bestByRepeatedId.set(c.repeated.id, c);
+  }
+  return [...bestByRepeatedId.values()].sort((a, b) => a.repeated.startMs - b.repeated.startMs);
+}
+
+const BUCKET_RANK: Record<ConfidenceBucket, number> = { LOW: 0, MEDIUM: 1, HIGH: 2 };
+
+// A phrase that keeps recurring back-to-back (a Whisper hallucination loop
+// on silent/noisy audio is the most common real-world cause, but a genuine
+// human stutter chain looks the same) chains up into original->repeated,
+// repeated->original->repeated, and so on. Surfacing every link as its own
+// result means a single 20-second hallucinated run floods the review panel
+// with a dozen-plus overlapping "repetitions" — and applying them one by
+// one would repeatedly re-cut the same stretch of the clip. Collapsing a
+// whole chain into one result (first original through last repeated) turns
+// it into the single actionable "this stretch repeats" item a person would
+// actually want to review and fix in one move.
+function collapseChains(deduped: RepetitionCandidate[]): RepetitionCandidate[] {
+  const sorted = [...deduped].sort((a, b) => a.repeated.startMs - b.repeated.startMs);
+  const collapsed: RepetitionCandidate[] = [];
+  let chain: RepetitionCandidate[] = [];
+
+  const flushChain = () => {
+    if (chain.length === 0) return;
+    if (chain.length === 1) {
+      collapsed.push(chain[0]);
+    } else {
+      const head = chain[0];
+      const tail = chain[chain.length - 1];
+      const worstBucket = chain.reduce<ConfidenceBucket>(
+        (worst, c) => (BUCKET_RANK[c.confidenceBucket] < BUCKET_RANK[worst] ? c.confidenceBucket : worst),
+        chain[0].confidenceBucket,
+      );
+      collapsed.push({
+        original: head.original,
+        repeated: tail.repeated,
+        kind: head.kind,
+        transcriptSimilarity: Math.min(...chain.map((c) => c.transcriptSimilarity)),
+        audioSimilarity: Math.min(...chain.map((c) => c.audioSimilarity)),
+        timingGapMs: head.timingGapMs,
+        confidenceScore: Math.min(...chain.map((c) => c.confidenceScore)),
+        confidenceBucket: worstBucket,
+        suggestedMode: head.suggestedMode,
+      });
+    }
+    chain = [];
+  };
+
+  for (const c of sorted) {
+    if (chain.length > 0 && chain[chain.length - 1].repeated.id !== c.original.id) flushChain();
+    chain.push(c);
+  }
+  flushChain();
+
+  return collapsed;
 }

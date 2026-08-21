@@ -215,6 +215,58 @@ describe("detectRepetitions", () => {
     expect(detectRepetitions(segments, SENSITIVITY_PRESETS.BALANCED)).toHaveLength(0);
   });
 
+  it("collapses a long back-to-back hallucinated-phrase run into ONE result instead of every pairwise combination", () => {
+    // Reproduces a real bug found live: Whisper hallucinated the same
+    // short garbage phrase repeatedly over ~22s of silent/noisy audio,
+    // producing 8 near-identical adjacent segments. A naive pairwise scan
+    // flags C(8,2) = 28 "repetitions" — nearly the whole scan result set
+    // for one problem — instead of the single contiguous run a person
+    // would actually want to review and fix in one move.
+    const phrase = "पुव ।";
+    const segments = Array.from({ length: 8 }, (_, i) => segment({ startMs: i * 700, endMs: i * 700 + 500, text: phrase }));
+    const results = detectRepetitions(segments, SENSITIVITY_PRESETS.BALANCED);
+    expect(results).toHaveLength(1);
+    expect(results[0].original.startMs).toBe(0);
+    expect(results[0].repeated.startMs).toBe(4900); // spans through the last occurrence in the run
+    expect(results[0].confidenceBucket).not.toBe("HIGH"); // 8x repetition — an intentional/looping refrain, not a 2x accident
+  });
+
+  it("does NOT flood results with a common short word spoken naturally throughout a scene (only near-adjacent repeats of a short word are real mistakes)", () => {
+    // "hai" recurring every ~5s across ordinary speech is completely
+    // normal Hindi grammar, not an accidental duplicate — reproduces the
+    // real-world flooding bug where a full-length video's routine reuse
+    // of short function words got flagged dozens of times. Each
+    // occurrence gets its own distinct fingerprint (all pairwise below
+    // the 0.97 render-duplicate cutoff, confirmed) — four genuinely
+    // separate utterances of the same common word, not four copies of one
+    // recording.
+    const segments = [
+      segment({ startMs: 0, endMs: 400, text: "hai", audioFingerprint: [13, 1, 10, 2, 7, 12, 3, 9, 5, 11, 1, 8, 2] }),
+      segment({ startMs: 5000, endMs: 5400, text: "hai", audioFingerprint: [2, 11, 4, 9, 1, 6, 13, 3, 10, 5, 12, 7, 1] }),
+      segment({ startMs: 10_000, endMs: 10_400, text: "hai", audioFingerprint: [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1] }),
+      segment({ startMs: 15_000, endMs: 15_400, text: "hai", audioFingerprint: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] }),
+    ];
+    expect(detectRepetitions(segments, SENSITIVITY_PRESETS.BALANCED)).toHaveLength(0);
+  });
+
+  it("still flags a genuinely stuttered short word repeated immediately, even though a wide-gap match for the same word would be noise", () => {
+    const segments = [segment({ startMs: 0, endMs: 400, text: "hai" }), segment({ startMs: 500, endMs: 900, text: "hai" })];
+    const results = detectRepetitions(segments, SENSITIVITY_PRESETS.BALANCED);
+    expect(results).toHaveLength(1);
+    expect(results[0].kind).toBe("WORD");
+  });
+
+  it("caps a short phrase's match window tighter than the full sentence gap, so an unrelated later reuse of a common short phrase isn't flagged", () => {
+    // "zyada hoti" (2 words) said once, then an unrelated later reuse of
+    // the same short phrase 10s on is ordinary speech, not a mistake —
+    // even though 10s is well inside BALANCED's 15s sentence-level gap.
+    const segments = [
+      segment({ startMs: 0, endMs: 900, text: "zyada hoti" }),
+      segment({ startMs: 10_000, endMs: 10_900, text: "zyada hoti" }),
+    ];
+    expect(detectRepetitions(segments, SENSITIVITY_PRESETS.BALANCED)).toHaveLength(0);
+  });
+
   it("handles a long multi-scene video without pairing segments that are each valid on their own but too far apart from each other", () => {
     const segments = [
       segment({ startMs: 0, endMs: 2000, text: "scene one dialogue line" }),
