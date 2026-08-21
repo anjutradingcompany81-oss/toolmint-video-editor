@@ -116,9 +116,12 @@ export interface TranscriptLine {
   id: string;
   trackId: string;
   clipId: string;
+  mediaAssetId: string;
   startMs: number;
   endMs: number;
+  sourceStartMs: number;
   text: string;
+  edited: boolean;
   role: "original" | "repeated" | null;
   repetitionResultId: string | null;
   confidenceBucket: ConfidenceBucket | null;
@@ -147,6 +150,13 @@ export function getVoiceScanResults(projectId: string, jobId: string) {
 
 export function getVoiceScanTranscript(projectId: string, jobId: string) {
   return apiFetch<TranscriptLine[]>(`/projects/${projectId}/voice-scans/${jobId}/transcript`);
+}
+
+export function updateTranscriptLine(projectId: string, jobId: string, input: { mediaAssetId: string; sourceStartMs: number; text: string }) {
+  return apiFetch<{ mediaAssetId: string; sourceStartMs: number; text: string; edited: boolean }>(
+    `/projects/${projectId}/voice-scans/${jobId}/transcript-line`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
 }
 
 export function cancelVoiceScan(projectId: string, jobId: string) {

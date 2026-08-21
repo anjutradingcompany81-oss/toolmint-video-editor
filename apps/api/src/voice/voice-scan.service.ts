@@ -30,9 +30,12 @@ export interface TranscriptLine {
   id: string;
   trackId: string;
   clipId: string;
+  mediaAssetId: string;
   startMs: number;
   endMs: number;
+  sourceStartMs: number;
   text: string;
+  edited: boolean;
   role: "original" | "repeated" | null;
   repetitionResultId: string | null;
   confidenceBucket: ConfidenceBucket | null;
@@ -43,6 +46,8 @@ export interface TranscriptLine {
 interface CachedTranscript {
   chunks: { startMs: number; endMs: number; text: string }[];
 }
+
+type TranscriptEdits = Record<string, string>;
 
 @Injectable()
 export class VoiceScanService {
@@ -137,19 +142,26 @@ export class VoiceScanService {
 
     const lines: TranscriptLine[] = [];
     for (const clip of clipsInScope) {
-      const cache = assetById.get(clip.mediaAssetId)?.transcriptCache as unknown as CachedTranscript | null;
+      const asset = assetById.get(clip.mediaAssetId);
+      const cache = asset?.transcriptCache as unknown as CachedTranscript | null;
       if (!cache?.chunks?.length) continue;
+      const edits = (asset?.transcriptEdits as unknown as TranscriptEdits | null) ?? {};
 
       const segments = buildTimelineSegments(clip, cache.chunks);
       for (const seg of segments) {
         const match = resultByKey.get(`${seg.clipId}:${seg.startMs}`);
+        const editKey = String(seg.sourceStartMs);
+        const hasEdit = Object.prototype.hasOwnProperty.call(edits, editKey);
         lines.push({
           id: seg.id,
           trackId: seg.trackId,
           clipId: seg.clipId,
+          mediaAssetId: clip.mediaAssetId,
           startMs: seg.startMs,
           endMs: seg.endMs,
-          text: seg.text,
+          sourceStartMs: seg.sourceStartMs,
+          text: hasEdit ? edits[editKey] : seg.text,
+          edited: hasEdit,
           role: match?.role ?? null,
           repetitionResultId: match?.result.id ?? null,
           confidenceBucket: match?.result.confidenceBucket ?? null,
@@ -160,6 +172,43 @@ export class VoiceScanService {
     }
 
     return lines.sort((a, b) => a.startMs - b.startMs);
+  }
+
+  // Persists a manual correction to one transcript line's text — separate
+  // from the repetition-correction flow entirely (that removes/mutes
+  // audio; this only fixes what the *script* reads, e.g. a mistranscribed
+  // word), per the spec requirement that edits are saved independently
+  // and never auto-applied to the video. Read-modify-write on the JSON
+  // column since Prisma has no native partial-JSON-object update.
+  async updateTranscriptLine(
+    userId: string,
+    projectId: string,
+    jobId: string,
+    mediaAssetId: string,
+    sourceStartMs: number,
+    text: string,
+  ): Promise<{ mediaAssetId: string; sourceStartMs: number; text: string; edited: boolean }> {
+    await this.projects.ensureEditable(userId, projectId);
+    await this.findJobOrThrow(projectId, jobId);
+
+    const asset = await this.prisma.mediaAsset.findFirst({ where: { id: mediaAssetId, projectId } });
+    if (!asset) throw new NotFoundException("Media asset not found");
+    const cache = asset.transcriptCache as unknown as CachedTranscript | null;
+    if (!cache?.chunks?.some((c) => c.startMs === sourceStartMs)) {
+      throw new BadRequestException("No transcript line starts at that source timestamp for this asset");
+    }
+
+    const edits = ((asset.transcriptEdits as unknown as TranscriptEdits | null) ?? {}) as TranscriptEdits;
+    const trimmed = text.trim();
+    const original = cache.chunks.find((c) => c.startMs === sourceStartMs)!.text;
+    if (trimmed === original) {
+      delete edits[String(sourceStartMs)]; // editing back to the original text clears the override rather than storing a no-op edit
+    } else {
+      edits[String(sourceStartMs)] = trimmed;
+    }
+    await this.prisma.mediaAsset.update({ where: { id: mediaAssetId }, data: { transcriptEdits: edits as unknown as Prisma.InputJsonValue } });
+
+    return { mediaAssetId, sourceStartMs, text: trimmed || original, edited: trimmed !== original };
   }
 
   async cancel(userId: string, projectId: string, jobId: string): Promise<VoiceScanJob> {

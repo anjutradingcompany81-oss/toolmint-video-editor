@@ -6,7 +6,7 @@ describe("buildTimelineSegments", () => {
     const chunks = [{ startMs: 500, endMs: 1500, text: "hello there" }];
     const segments = buildTimelineSegments(clip, chunks);
     expect(segments).toEqual([
-      { id: "clip_1:500", trackId: "track_1", clipId: "clip_1", mediaAssetId: "asset_1", startMs: 1500, endMs: 2500, text: "hello there" },
+      { id: "clip_1:500", trackId: "track_1", clipId: "clip_1", mediaAssetId: "asset_1", startMs: 1500, endMs: 2500, sourceStartMs: 500, text: "hello there" },
     ]);
   });
 

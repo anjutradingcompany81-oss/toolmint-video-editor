@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Patch, UseGuards } from "@nestjs/common";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PublicUser } from "../auth/public-user";
 import { CreateVoiceScanDto } from "./dto/create-voice-scan.dto";
 import { BatchMarkResultsDto, MarkResultDto } from "./dto/mark-result.dto";
+import { UpdateTranscriptLineDto } from "./dto/update-transcript-line.dto";
 import { VoiceScanService } from "./voice-scan.service";
 
 @UseGuards(JwtAuthGuard)
@@ -34,6 +35,16 @@ export class VoiceScanController {
   @Get(":jobId/transcript")
   transcript(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Param("jobId") jobId: string) {
     return this.voiceScans.transcript(user.id, projectId, jobId);
+  }
+
+  @Patch(":jobId/transcript-line")
+  updateTranscriptLine(
+    @CurrentUser() user: PublicUser,
+    @Param("projectId") projectId: string,
+    @Param("jobId") jobId: string,
+    @Body() dto: UpdateTranscriptLineDto,
+  ) {
+    return this.voiceScans.updateTranscriptLine(user.id, projectId, jobId, dto.mediaAssetId, dto.sourceStartMs, dto.text);
   }
 
   @Post(":jobId/cancel")

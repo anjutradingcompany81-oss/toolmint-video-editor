@@ -276,6 +276,15 @@ model MediaAsset {
   // it. Shape: { language, chunks: [{ startMs, endMs, text, mfcc: number[] }] }
   // (see apps/api/src/voice/audio-analysis/transcript-cache.util.ts).
   transcriptCache Json?
+  // User-edited overrides for individual transcript lines, keyed by the
+  // line's *source-local* chunk start ms (as a string, since JSON object
+  // keys are always strings) — e.g. {"22300": "corrected text"}. Applied
+  // on top of transcriptCache.chunks when building the transcript view
+  // (voice-scan.service.ts#transcript); never mutates transcriptCache
+  // itself, so a later re-scan's fresh transcription doesn't silently
+  // discard a human correction, and an edit survives independently of
+  // ANALYSIS_VERSION cache invalidation.
+  transcriptEdits Json?
   checksum    String?
   uploadedById String
   createdAt   DateTime          @default(now())

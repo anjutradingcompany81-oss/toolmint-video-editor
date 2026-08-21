@@ -7,9 +7,7 @@ import { pickDetectionWindows, pickDominantLanguage } from "./language-detect.ut
 const WHISPER_SAMPLE_RATE = 16000;
 
 // Runs entirely locally (no external API calls, nothing leaves the
-// server), CPU-only — this VPS has no GPU, so a smaller multilingual
-// model is used to keep scan times tolerable rather than reaching for a
-// larger, more accurate one.
+// server), CPU-only — this VPS has no GPU.
 //
 // Specifically the "Xenova/" export, not "onnx-community/whisper-base" —
 // confirmed live that the onnx-community export throws "Model outputs
@@ -19,7 +17,25 @@ const WHISPER_SAMPLE_RATE = 16000;
 // comparison are derived from word timestamps, not just the transcript
 // text) — the Xenova export includes cross-attentions and word timestamps
 // work correctly.
-const DEFAULT_MODEL = "Xenova/whisper-base";
+//
+// "whisper-base" (74M params) was the original choice for scan-time
+// speed, but it has a well-documented upstream limitation (openai/whisper
+// GitHub discussion #1662): it transcribes Hindi speech into Perso-
+// Arabic/Urdu script rather than Devanagari, even when `language:
+// "hindi"` is explicitly forced — the actual *words* can be right, but
+// the script is wrong, which defeats a Hindi-mode UI outright. Confirmed
+// live on this exact pipeline: "whisper-base" produced " میں میں کل کس
+// دا انگا" for a Hindi clip; "whisper-small" (244M params) on the
+// identical audio correctly produced " में में के लव پीस्टा उंگا" —
+// Devanagari, and it still preserved the "में में" word-repeat pattern
+// the detector depends on. Larger models are documented to have better
+// non-Latin script fidelity in general; this empirically confirms it for
+// this specific model family and this specific pipeline. Trade-off:
+// ~3x the parameters means slower CPU inference and a larger model
+// download/cache — accepted because correct-script Hindi output is a
+// hard product requirement, not a nice-to-have. Overridable via
+// WHISPER_MODEL without a code change if scan latency becomes a problem.
+const DEFAULT_MODEL = "Xenova/whisper-small";
 
 export interface TranscriptionResult {
   language: string | null;

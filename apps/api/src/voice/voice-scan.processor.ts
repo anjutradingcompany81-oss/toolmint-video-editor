@@ -25,7 +25,20 @@ interface CachedChunk {
   pitchHz: number;
 }
 
+// Bump this whenever a change to the transcription/detection pipeline
+// would produce meaningfully different output for the same source audio
+// (model swap, language-detection fix, script/decoding change, chunking
+// change, etc.). Root-caused a real bug: `transcriptCache` had no version
+// marker at all, so `cached ?? reanalyze()` below reused transcripts
+// forever, even after shipping fixes — a video scanned before the Hindi-
+// transcription fix (commit 970e01d) kept serving the old broken
+// transcript on every subsequent scan, with the fix having no effect for
+// that asset until now. Bump this constant, don't just add a field, every
+// time the pipeline changes again.
+const ANALYSIS_VERSION = 2;
+
 interface CachedAssetAnalysis {
+  analysisVersion: number;
   language: string | null;
   chunks: CachedChunk[];
   speakerSegments: DiarizationSegment[];
@@ -94,7 +107,7 @@ export class VoiceScanProcessor implements OnModuleDestroy {
       const analysisByAssetId = new Map<string, CachedAssetAnalysis>();
       for (const [index, assetId] of audibleAssetIds.entries()) {
         if (checkpoint.completedAssetIds.includes(assetId)) {
-          const cached = assetById.get(assetId)?.transcriptCache as unknown as CachedAssetAnalysis | null;
+          const cached = this.validCache(assetById.get(assetId)?.transcriptCache);
           if (cached) {
             analysisByAssetId.set(assetId, cached);
             continue;
@@ -104,7 +117,7 @@ export class VoiceScanProcessor implements OnModuleDestroy {
         if (await this.pausedOrCancelled(scanJob.id, checkpoint)) return;
 
         const asset = assetById.get(assetId)!;
-        const cached = asset.transcriptCache as unknown as CachedAssetAnalysis | null;
+        const cached = this.validCache(asset.transcriptCache);
         const analysis = cached ?? (await this.analyzeAsset(asset, workDir, scanJob.id));
         analysisByAssetId.set(assetId, analysis);
 
@@ -206,7 +219,7 @@ export class VoiceScanProcessor implements OnModuleDestroy {
     await this.setStage(scanJobId, VoiceScanStatus.DETECTING_SPEECH, "Detecting speech", undefined);
     const totalDurationMs = asset.durationMs ?? 0;
     const speechRegions = totalDurationMs > 0 ? await this.safeDetectSpeech(localPath, totalDurationMs) : [];
-    if (speechRegions.length === 0) return { language: null, chunks: [], speakerSegments: [] };
+    if (speechRegions.length === 0) return { analysisVersion: ANALYSIS_VERSION, language: null, chunks: [], speakerSegments: [] };
 
     const { samples } = await extractPcm(localPath, WHISPER_SAMPLE_RATE);
     const transcription = await this.whisper.transcribe(samples);
@@ -230,7 +243,17 @@ export class VoiceScanProcessor implements OnModuleDestroy {
     await this.setStage(scanJobId, VoiceScanStatus.DIARIZING, "Identifying speakers", undefined);
     const speakerSegments = await this.diarization.diarize(localPath);
 
-    return { language: transcription.language, chunks, speakerSegments };
+    return { analysisVersion: ANALYSIS_VERSION, language: transcription.language, chunks, speakerSegments };
+  }
+
+  // Treats a cache entry as usable only if it was written by the current
+  // pipeline version — see ANALYSIS_VERSION's comment. Anything missing
+  // the field at all (data from before this fix existed) or stamped with
+  // an older number is discarded, forcing a real re-analysis.
+  private validCache(raw: unknown): CachedAssetAnalysis | null {
+    const cached = raw as unknown as CachedAssetAnalysis | null;
+    if (!cached || cached.analysisVersion !== ANALYSIS_VERSION) return null;
+    return cached;
   }
 
   private async safeDetectSpeech(localPath: string, totalDurationMs: number) {

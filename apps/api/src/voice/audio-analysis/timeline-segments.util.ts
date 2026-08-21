@@ -26,6 +26,11 @@ export interface TimelineTextSegment {
   mediaAssetId: string;
   startMs: number;
   endMs: number;
+  // Source-local (asset-relative) start ms of the underlying transcript
+  // chunk — the stable key for anything that must survive the clip being
+  // moved/retrimmed on the timeline, e.g. a saved transcript-line edit
+  // (see MediaAsset.transcriptEdits).
+  sourceStartMs: number;
   text: string;
 }
 
@@ -46,6 +51,7 @@ export function buildTimelineSegments(clip: ClipPlacement, chunks: CachedChunkLi
       mediaAssetId: clip.mediaAssetId,
       startMs: clip.startMs + (overlapStart - clipSourceStart),
       endMs: clip.startMs + (overlapEnd - clipSourceStart),
+      sourceStartMs: chunk.startMs,
       text: chunk.text,
     });
   }
