@@ -19,6 +19,15 @@ RUN npm ci
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /repo
+# Needed here too, not just in `deps`/`runtime` — this stage is also used
+# standalone (deploy.yml builds it as `toolmint-api-migrate`) to run the
+# v1->v2 data migration script directly against Postgres via Prisma
+# Client, which needs to detect the local OpenSSL version to pick the
+# right query-engine binary. Without it Prisma silently mis-detects the
+# target and fails at the first query, not at build time — confirmed live
+# ("Prisma Client was generated for debian-openssl-3.0.x, but the actual
+# deployment required debian-openssl-1.1.x").
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 # `npm run --workspace` needs the root package.json to know what a
 # "workspace" even is — easy to forget since it's not itself a dependency,
 # just plumbing npm reads directly.
