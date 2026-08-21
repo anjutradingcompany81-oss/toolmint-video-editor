@@ -43,26 +43,22 @@ export default function Home() {
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6">
       <div>
-        <p className="text-sm tracking-wide text-[var(--tm-text-dim)]">TOOLMINT</p>
-        <h1 className="mt-2 text-3xl font-semibold">ToolMint Video Editor</h1>
-        <p className="mt-3 max-w-md text-[var(--tm-text-dim)]">
-          Phase 1 complete, Phase 2 (the editor) underway. Sign in, create a
-          project, and open it to start building a storyboard.
+        <p className="text-sm tracking-wide text-ink-muted">PROCUT</p>
+        <h1 className="mt-2 text-3xl font-semibold">ProCut Video Editor</h1>
+        <p className="mt-3 max-w-md text-ink-muted">
+          Upload your clips, arrange and trim them on the timeline, and export one merged video — all in the browser.
         </p>
         <div className="mt-4 flex gap-3">
           {status === "authenticated" && user ? (
-            <Link href="/dashboard" className="rounded-md bg-[var(--tm-accent)] px-4 py-2 text-sm font-medium text-black">
+            <Link href="/dashboard" className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-ink">
               Go to dashboard
             </Link>
           ) : (
             <>
-              <Link href="/login" className="rounded-md bg-[var(--tm-accent)] px-4 py-2 text-sm font-medium text-black">
+              <Link href="/login" className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-ink">
                 Sign in
               </Link>
-              <Link
-                href="/register"
-                className="rounded-md border border-[var(--tm-line)] px-4 py-2 text-sm font-medium hover:border-[var(--tm-accent)]"
-              >
+              <Link href="/register" className="rounded-md border border-line px-4 py-2 text-sm font-medium hover:border-brand">
                 Create account
               </Link>
             </>
@@ -70,22 +66,18 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] p-4">
-        <p className="text-xs uppercase tracking-wide text-[var(--tm-text-dim)]">API status</p>
+      <div className="rounded-lg border border-line bg-panel p-4">
+        <p className="text-xs uppercase tracking-wide text-ink-muted">API status</p>
         {apiStatus.state === "checking" && <p className="mt-1">Checking…</p>}
         {apiStatus.state === "ok" && (
-          <p className="mt-1 text-[var(--tm-accent)]">
-            Connected — last check {new Date(apiStatus.timestamp).toLocaleTimeString()}
-          </p>
+          <p className="mt-1 text-success">Connected — last check {new Date(apiStatus.timestamp).toLocaleTimeString()}</p>
         )}
         {apiStatus.state === "error" && (
-          <p className="mt-1 text-red-400">
-            Unreachable ({apiStatus.message}). Start the API with{" "}
-            <code>npm run dev:api</code>.
+          <p className="mt-1 text-danger">
+            Unreachable ({apiStatus.message}). Start the API with <code>npm run dev:api</code>.
           </p>
         )}
       </div>
-
     </main>
   );
 }

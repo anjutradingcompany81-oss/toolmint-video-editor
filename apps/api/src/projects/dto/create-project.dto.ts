@@ -1,5 +1,4 @@
-import { ProjectAspectRatio } from "@prisma/client";
-import { IsEnum, IsInt, IsOptional, IsPositive, IsString, MaxLength, MinLength } from "class-validator";
+import { IsInt, IsOptional, IsPositive, IsString, MaxLength, MinLength } from "class-validator";
 
 export class CreateProjectDto {
   @IsString()
@@ -8,26 +7,12 @@ export class CreateProjectDto {
   title!: string;
 
   @IsOptional()
-  @IsEnum(ProjectAspectRatio)
-  aspectRatio?: ProjectAspectRatio;
-
-  @IsOptional()
-  @IsInt()
-  @IsPositive()
-  customWidth?: number;
-
-  @IsOptional()
-  @IsInt()
-  @IsPositive()
-  customHeight?: number;
-
-  @IsOptional()
   @IsInt()
   @IsPositive()
   fps?: number;
 
   // Which workspace to create the project in. Defaults to the caller's
-  // (currently only) workspace until team workspaces exist (Phase 4).
+  // (currently only) workspace until team workspaces exist.
   @IsOptional()
   @IsString()
   workspaceId?: string;

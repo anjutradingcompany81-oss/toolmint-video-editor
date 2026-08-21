@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { MembershipRole, Project, ProjectAspectRatio } from "@prisma/client";
+import { MembershipRole, Project } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CreateProjectDto } from "./dto/create-project.dto";
@@ -23,20 +23,12 @@ export class ProjectsService {
 
   async create(userId: string, dto: CreateProjectDto): Promise<ProjectResponse> {
     const workspaceId = await this.resolveWorkspaceId(userId, dto.workspaceId);
-    const aspectRatio = dto.aspectRatio ?? ProjectAspectRatio.RATIO_16_9;
-
-    if (aspectRatio === ProjectAspectRatio.CUSTOM && (!dto.customWidth || !dto.customHeight)) {
-      throw new BadRequestException("customWidth and customHeight are required for a custom aspect ratio");
-    }
 
     const project = await this.prisma.$transaction(async (tx) => {
       const project = await tx.project.create({
         data: {
           workspaceId,
           title: dto.title,
-          aspectRatio,
-          customWidth: aspectRatio === ProjectAspectRatio.CUSTOM ? dto.customWidth : null,
-          customHeight: aspectRatio === ProjectAspectRatio.CUSTOM ? dto.customHeight : null,
           fps: dto.fps ?? 30,
           createdById: userId,
         },
@@ -46,7 +38,7 @@ export class ProjectsService {
           projectId: project.id,
           createdById: userId,
           label: "Initial version",
-          composition: buildEmptyComposition(project),
+          composition: buildEmptyComposition(),
         },
       });
       return project;
@@ -112,9 +104,6 @@ export class ProjectsService {
         data: {
           workspaceId: project.workspaceId,
           title: `${project.title} (Copy)`,
-          aspectRatio: project.aspectRatio,
-          customWidth: project.customWidth,
-          customHeight: project.customHeight,
           fps: project.fps,
           createdById: userId,
         },
@@ -124,7 +113,7 @@ export class ProjectsService {
           projectId: copy.id,
           createdById: userId,
           label: "Duplicated version",
-          composition: latestVersion?.composition ?? buildEmptyComposition(copy),
+          composition: latestVersion?.composition ?? buildEmptyComposition(),
         },
       });
       return copy;

@@ -1,23 +1,9 @@
 import { apiFetch } from "./api-client";
 
-export type AspectRatio = "RATIO_16_9" | "RATIO_9_16" | "RATIO_1_1" | "RATIO_4_5" | "RATIO_21_9" | "CUSTOM";
-
-export const ASPECT_RATIO_LABELS: Record<AspectRatio, string> = {
-  RATIO_16_9: "16:9 landscape",
-  RATIO_9_16: "9:16 vertical",
-  RATIO_1_1: "1:1 square",
-  RATIO_4_5: "4:5 portrait",
-  RATIO_21_9: "21:9 cinematic",
-  CUSTOM: "Custom",
-};
-
 export interface Project {
   id: string;
   workspaceId: string;
   title: string;
-  aspectRatio: AspectRatio;
-  customWidth: number | null;
-  customHeight: number | null;
   fps: number;
   thumbnailUrl: string | null;
   isArchived: boolean;
@@ -41,6 +27,7 @@ export interface MediaAsset {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  hasAudio: boolean;
   // Flat [min0, max0, min1, max1, ...] array, floats in -1..1, fixed at 200
   // buckets regardless of clip length — stretched to fit whatever pixel
   // width the clip occupies wherever it's drawn.
@@ -57,7 +44,7 @@ export function listProjects(params: { includeArchived?: boolean; search?: strin
   return apiFetch<Project[]>(`/projects${suffix}`);
 }
 
-export function createProject(input: { title: string; aspectRatio?: AspectRatio; fps?: number }) {
+export function createProject(input: { title: string; fps?: number }) {
   return apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify(input) });
 }
 

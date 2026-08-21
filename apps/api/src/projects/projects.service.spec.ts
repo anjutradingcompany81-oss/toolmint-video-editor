@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
-import { MembershipRole, ProjectAspectRatio } from "@prisma/client";
+import { MembershipRole } from "@prisma/client";
 import { ProjectsService } from "./projects.service";
 import type { PrismaService } from "../prisma/prisma.service";
 import type { StorageService } from "../storage/storage.service";
@@ -38,9 +38,6 @@ function buildProject(overrides: Partial<{ id: string; workspaceId: string; titl
     id: overrides.id ?? "proj_1",
     workspaceId: overrides.workspaceId ?? "ws_1",
     title: overrides.title ?? "My Video",
-    aspectRatio: ProjectAspectRatio.RATIO_16_9,
-    customWidth: null,
-    customHeight: null,
     fps: 30,
     thumbnailKey: overrides.thumbnailKey ?? null,
     isArchived: false,
@@ -77,15 +74,6 @@ describe("ProjectsService", () => {
         expect.objectContaining({ data: expect.objectContaining({ label: "Initial version" }) }),
       );
       expect(result.title).toBe("My Video");
-    });
-
-    it("rejects a custom aspect ratio without dimensions", async () => {
-      prisma.membership.findMany.mockResolvedValue([{ workspaceId: "ws_1" }]);
-
-      await expect(service.create("user_1", { title: "My Video", aspectRatio: ProjectAspectRatio.CUSTOM })).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
-      expect(prisma.project.create).not.toHaveBeenCalled();
     });
 
     it("throws when the caller has no workspace at all", async () => {
@@ -141,7 +129,7 @@ describe("ProjectsService", () => {
     it("copies the latest composition into a new project", async () => {
       prisma.project.findUnique.mockResolvedValue(buildProject());
       prisma.membership.findUnique.mockResolvedValue({ role: MembershipRole.OWNER });
-      prisma.projectVersion.findFirst.mockResolvedValue({ composition: { schemaVersion: "1.0", scenes: [{ id: "scn_1" }] } });
+      prisma.projectVersion.findFirst.mockResolvedValue({ composition: { schemaVersion: "1.0", clips: [{ id: "clip_1" }] } });
       prisma.project.create.mockResolvedValue(buildProject({ id: "proj_2", title: "My Video (Copy)" }));
 
       const copy = await service.duplicate("user_1", "proj_1");
@@ -149,7 +137,7 @@ describe("ProjectsService", () => {
       expect(copy.title).toBe("My Video (Copy)");
       expect(prisma.projectVersion.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ composition: { schemaVersion: "1.0", scenes: [{ id: "scn_1" }] } }),
+          data: expect.objectContaining({ composition: { schemaVersion: "1.0", clips: [{ id: "clip_1" }] } }),
         }),
       );
     });

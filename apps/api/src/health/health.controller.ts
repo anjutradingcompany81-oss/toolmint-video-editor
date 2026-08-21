@@ -15,7 +15,7 @@ export class HealthController {
 
     return {
       status: "ok",
-      service: "toolmint-api",
+      service: "procut-api",
       timestamp: new Date().toISOString(),
     };
   }

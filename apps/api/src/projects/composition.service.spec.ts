@@ -7,9 +7,7 @@ import type { Composition } from "./composition.schema";
 function buildComposition(overrides: Partial<Composition> = {}): Composition {
   return {
     schemaVersion: "1.0",
-    aspectRatio: "RATIO_16_9",
-    fps: 30,
-    scenes: [{ id: "scn_1", name: "Intro", durationMs: 5000, tracks: [] }],
+    clips: [{ id: "clip_1", mediaAssetId: "med_1", trimInMs: 0, trimOutMs: 0, volume: 1, muted: false }],
     updatedAt: new Date().toISOString(),
     ...overrides,
   };
@@ -66,188 +64,60 @@ describe("CompositionService", () => {
       );
     });
 
+    it("accepts an empty clip list", async () => {
+      const composition = buildComposition({ clips: [] });
+      prisma.projectVersion.create.mockResolvedValue({ id: "ver_2b", composition, createdAt: new Date() });
+
+      await expect(service.save("user_1", "proj_1", composition)).resolves.toBeDefined();
+    });
+
     it("rejects a composition missing required fields", async () => {
       await expect(service.save("user_1", "proj_1", { schemaVersion: "1.0" })).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.projectVersion.create).not.toHaveBeenCalled();
     });
 
-    it("rejects a scene with a non-positive duration", async () => {
-      const composition = buildComposition({ scenes: [{ id: "scn_1", name: "Intro", durationMs: 0, tracks: [] }] });
-
-      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it("rejects an unknown track type", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [{ id: "trk_1", type: "hologram", locked: false, muted: false, items: [] }],
-          },
-        ],
-      };
-
-      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it("accepts a track with a placed clip and fills in defaults for omitted fields", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "video",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "clip", mediaAssetId: "med_1", startMs: 0, durationMs: 3000 }],
-              },
-            ],
-          },
-        ],
-      };
+    it("fills in defaults for a clip that only specifies id and mediaAssetId", async () => {
+      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1" }] };
       prisma.projectVersion.create.mockResolvedValue({ id: "ver_3", composition, createdAt: new Date() });
 
       await service.save("user_1", "proj_1", composition);
 
-      const savedComposition = prisma.projectVersion.create.mock.calls[0][0].data.composition;
-      const savedItem = savedComposition.scenes[0].tracks[0].items[0];
-      expect(savedItem).toMatchObject({
-        trimInMs: 0,
-        trimOutMs: 0,
-        transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
-      });
+      const savedClip = prisma.projectVersion.create.mock.calls[0][0].data.composition.clips[0];
+      expect(savedClip).toMatchObject({ trimInMs: 0, trimOutMs: 0, volume: 1, muted: false });
     });
 
-    it("rejects a clip with a non-positive duration", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "video",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "clip", mediaAssetId: "med_1", startMs: 0, durationMs: 0 }],
-              },
-            ],
-          },
-        ],
-      };
+    it("rejects a clip with a negative trim offset", async () => {
+      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1", trimInMs: -100 }] };
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it("rejects an item missing its mediaAssetId", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "video",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "clip", startMs: 0, durationMs: 3000 }],
-              },
-            ],
-          },
-        ],
-      };
+    it("rejects a clip missing its mediaAssetId", async () => {
+      const composition = { ...buildComposition(), clips: [{ id: "clip_1" }] };
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it("accepts a text item and fills in style defaults", async () => {
+    it("rejects a volume outside the 0-2 range", async () => {
+      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1", volume: 3 }] };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("preserves clip array order (order is timeline order)", async () => {
       const composition = {
         ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "text",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "text", content: "Hello", startMs: 0, durationMs: 3000 }],
-              },
-            ],
-          },
+        clips: [
+          { id: "clip_1", mediaAssetId: "med_1" },
+          { id: "clip_2", mediaAssetId: "med_2" },
         ],
       };
       prisma.projectVersion.create.mockResolvedValue({ id: "ver_4", composition, createdAt: new Date() });
 
       await service.save("user_1", "proj_1", composition);
 
-      const savedItem = prisma.projectVersion.create.mock.calls[0][0].data.composition.scenes[0].tracks[0].items[0];
-      expect(savedItem).toMatchObject({ content: "Hello", fontSize: 48, color: "#ffffff" });
-    });
-
-    it("rejects a text item with no content", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "text",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "text", content: "", startMs: 0, durationMs: 3000 }],
-              },
-            ],
-          },
-        ],
-      };
-
-      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it("rejects a text item with a non-hex color", async () => {
-      const composition = {
-        ...buildComposition(),
-        scenes: [
-          {
-            id: "scn_1",
-            name: "Intro",
-            durationMs: 5000,
-            tracks: [
-              {
-                id: "trk_1",
-                type: "text",
-                locked: false,
-                muted: false,
-                items: [{ id: "itm_1", type: "text", content: "Hi", color: "red", startMs: 0, durationMs: 3000 }],
-              },
-            ],
-          },
-        ],
-      };
-
-      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+      const savedClips = prisma.projectVersion.create.mock.calls[0][0].data.composition.clips;
+      expect(savedClips.map((c: { id: string }) => c.id)).toEqual(["clip_1", "clip_2"]);
     });
   });
 });

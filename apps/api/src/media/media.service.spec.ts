@@ -7,7 +7,7 @@ import type { ProjectsService } from "../projects/projects.service";
 import type { MediaProbeService } from "./media-probe.service";
 
 interface PrismaMock {
-  mediaAsset: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock; delete: jest.Mock };
+  mediaAsset: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock; delete: jest.Mock };
 }
 
 function buildFile(overrides: Partial<Express.Multer.File> = {}): Express.Multer.File {
@@ -40,6 +40,7 @@ function buildAsset(overrides: Partial<{ id: string; projectId: string; status: 
     durationMs: null,
     width: null,
     height: null,
+    hasAudio: true,
     checksum: "abc",
     uploadedById: "user_1",
     createdAt: new Date(),
@@ -59,6 +60,7 @@ describe("MediaService", () => {
         create: jest.fn().mockResolvedValue(buildAsset({ status: MediaAssetStatus.UPLOADING })),
         update: jest.fn().mockResolvedValue(buildAsset()),
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn(),
         delete: jest.fn().mockResolvedValue({}),
       },
@@ -73,7 +75,7 @@ describe("MediaService", () => {
       findOne: jest.fn().mockResolvedValue({ id: "proj_1" }),
     };
     probe = {
-      probe: jest.fn().mockResolvedValue({ durationMs: null, width: null, height: null, waveformPeaks: null }),
+      probe: jest.fn().mockResolvedValue({ durationMs: null, width: null, height: null, hasAudio: true, waveformPeaks: null }),
     };
 
     service = new MediaService(
@@ -92,8 +94,23 @@ describe("MediaService", () => {
       expect(storage.putObject).not.toHaveBeenCalled();
     });
 
-    it("rejects a file over the per-kind size limit", async () => {
-      const file = buildFile({ mimetype: "image/png", size: 999_999_999 });
+    it("rejects a non-video file type such as an image", async () => {
+      const file = buildFile({ mimetype: "image/png", originalname: "frame.png" });
+
+      await expect(service.upload("user_1", "proj_1", file)).rejects.toBeInstanceOf(BadRequestException);
+      expect(storage.putObject).not.toHaveBeenCalled();
+    });
+
+    it("rejects a video over the size limit", async () => {
+      const file = buildFile({ size: 2 * 1024 * 1024 * 1024 });
+
+      await expect(service.upload("user_1", "proj_1", file)).rejects.toBeInstanceOf(BadRequestException);
+      expect(storage.putObject).not.toHaveBeenCalled();
+    });
+
+    it("rejects a duplicate upload by checksum without touching storage", async () => {
+      prisma.mediaAsset.findFirst.mockResolvedValueOnce(buildAsset({ id: "asset_existing" }));
+      const file = buildFile();
 
       await expect(service.upload("user_1", "proj_1", file)).rejects.toBeInstanceOf(BadRequestException);
       expect(storage.putObject).not.toHaveBeenCalled();
@@ -108,14 +125,14 @@ describe("MediaService", () => {
       expect(storage.putObject).toHaveBeenCalledWith(expect.stringContaining("projects/proj_1/"), file.buffer, "video/mp4");
       expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, waveformPeaks: Prisma.JsonNull },
+          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, hasAudio: true, waveformPeaks: Prisma.JsonNull },
         }),
       );
       expect(result.previewUrl).toBe("https://storage.example/signed");
     });
 
-    it("probes video uploads for duration/dimensions/waveform and persists the result", async () => {
-      probe.probe.mockResolvedValueOnce({ durationMs: 6000, width: 640, height: 360, waveformPeaks: [-0.5, 0.5] });
+    it("probes video uploads for duration/dimensions/audio/waveform and persists the result", async () => {
+      probe.probe.mockResolvedValueOnce({ durationMs: 6000, width: 640, height: 360, hasAudio: false, waveformPeaks: [-0.5, 0.5] });
       const file = buildFile();
 
       await service.upload("user_1", "proj_1", file);
@@ -123,17 +140,9 @@ describe("MediaService", () => {
       expect(probe.probe).toHaveBeenCalledWith(file.buffer, "mp4", true);
       expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: MediaAssetStatus.READY, durationMs: 6000, width: 640, height: 360, waveformPeaks: [-0.5, 0.5] },
+          data: { status: MediaAssetStatus.READY, durationMs: 6000, width: 640, height: 360, hasAudio: false, waveformPeaks: [-0.5, 0.5] },
         }),
       );
-    });
-
-    it("skips probing entirely for documents", async () => {
-      const file = buildFile({ originalname: "brief.pdf", mimetype: "application/pdf" });
-
-      await service.upload("user_1", "proj_1", file);
-
-      expect(probe.probe).not.toHaveBeenCalled();
     });
 
     it("still marks the asset READY when probing throws", async () => {
@@ -145,7 +154,7 @@ describe("MediaService", () => {
       expect(result.status).toBe(MediaAssetStatus.READY);
       expect(prisma.mediaAsset.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, waveformPeaks: Prisma.JsonNull },
+          data: { status: MediaAssetStatus.READY, durationMs: null, width: null, height: null, hasAudio: true, waveformPeaks: Prisma.JsonNull },
         }),
       );
     });

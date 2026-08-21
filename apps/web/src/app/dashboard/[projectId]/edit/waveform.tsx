@@ -8,31 +8,23 @@ const MID = VIEWBOX_H / 2;
 
 interface WaveformProps {
   peaks: number[];
-  // The clip on the timeline usually only plays back a trimmed slice of the
-  // source — peaks always cover the *whole* source at a fixed 200 buckets,
-  // so this slices to just the visible portion when the source length is
-  // known. Falls back to showing the full waveform (slightly inaccurate for
-  // a trimmed clip, but still informative) when it isn't.
+  // Peaks always cover the *whole* source at a fixed 200 buckets — this
+  // slices to just the trimmed slice a clip actually plays back.
   sourceDurationMs: number | null;
   trimInMs: number;
   durationMs: number;
-  // A clip playing faster/slower than 100% consumes durationMs*speedRate of
-  // source time, not durationMs — matters here because the visible slice of
-  // the source waveform has to match what's actually being played back.
-  speedPercent?: number;
   className?: string;
 }
 
-export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs, speedPercent = 100, className }: WaveformProps) {
+export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs, className }: WaveformProps) {
   const path = useMemo(() => {
     const bucketCount = peaks.length / 2;
     let visible = peaks;
-    const sourceSpanMs = durationMs * (speedPercent / 100);
 
     if (sourceDurationMs && sourceDurationMs > 0) {
       const bucketMs = sourceDurationMs / bucketCount;
       const startBucket = Math.max(0, Math.floor(trimInMs / bucketMs));
-      const endBucket = Math.min(bucketCount, Math.ceil((trimInMs + sourceSpanMs) / bucketMs));
+      const endBucket = Math.min(bucketCount, Math.ceil((trimInMs + durationMs) / bucketMs));
       visible = peaks.slice(startBucket * 2, Math.max(startBucket * 2 + 2, endBucket * 2));
     }
 
@@ -49,7 +41,7 @@ export default function Waveform({ peaks, sourceDurationMs, trimInMs, durationMs
       bottom.push(`${x.toFixed(1)},${(MID - min * MID).toFixed(1)}`);
     }
     return `M ${top.join(" L ")} L ${bottom.reverse().join(" L ")} Z`;
-  }, [peaks, sourceDurationMs, trimInMs, durationMs, speedPercent]);
+  }, [peaks, sourceDurationMs, trimInMs, durationMs]);
 
   if (!path) return null;
 

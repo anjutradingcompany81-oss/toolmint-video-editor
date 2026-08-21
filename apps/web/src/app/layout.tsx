@@ -3,8 +3,8 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
-  title: "ToolMint Video Editor",
-  description: "A browser-based, scene-first video editor from ToolMint.",
+  title: "ProCut Video Editor",
+  description: "Upload, arrange, trim, and merge your clips into one video — right in the browser.",
 };
 
 export default function RootLayout({
@@ -12,7 +12,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className="min-h-screen antialiased">
+      <body className="min-h-screen bg-surface text-ink antialiased">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

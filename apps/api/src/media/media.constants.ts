@@ -5,20 +5,29 @@ interface MediaKindRule {
   maxBytes: number;
 }
 
-// Placeholder limits for Phase 1 — plan-based storage/quality limits (per
-// the PRD's billing section) replace these once subscriptions exist.
-export const MEDIA_RULES: Record<MediaAssetKind, MediaKindRule> = {
-  VIDEO: { mimeTypes: ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"], maxBytes: 500 * 1024 * 1024 },
-  IMAGE: { mimeTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"], maxBytes: 25 * 1024 * 1024 },
-  AUDIO: { mimeTypes: ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/aac", "audio/ogg"], maxBytes: 100 * 1024 * 1024 },
-  DOCUMENT: { mimeTypes: ["application/pdf"], maxBytes: 20 * 1024 * 1024 },
+// ProCut only merges video — MediaAssetKind still has IMAGE/AUDIO/DOCUMENT
+// (harmless to leave in the schema), but nothing in this rule set accepts
+// them, so resolveMediaKind() below rejects anything that isn't video with
+// a clear "unsupported file type" error rather than silently misfiling it.
+export const MEDIA_RULES: Partial<Record<MediaAssetKind, MediaKindRule>> = {
+  VIDEO: {
+    mimeTypes: [
+      "video/mp4",
+      "video/quicktime", // .mov
+      "video/webm",
+      "video/x-matroska", // .mkv
+      "video/x-msvideo", // .avi
+      "video/avi",
+    ],
+    maxBytes: 1024 * 1024 * 1024, // 1GB — large enough for real footage, still bounded
+  },
 };
 
 export const MAX_UPLOAD_BYTES = Math.max(...Object.values(MEDIA_RULES).map((rule) => rule.maxBytes));
 
 export function resolveMediaKind(mimeType: string): MediaAssetKind | null {
   for (const kind of Object.keys(MEDIA_RULES) as MediaAssetKind[]) {
-    if (MEDIA_RULES[kind].mimeTypes.includes(mimeType)) return kind;
+    if (MEDIA_RULES[kind]?.mimeTypes.includes(mimeType)) return kind;
   }
   return null;
 }

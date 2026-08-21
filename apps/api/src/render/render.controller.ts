@@ -12,7 +12,7 @@ export class RenderController {
 
   @Post()
   create(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Body() dto: CreateExportDto) {
-    return this.render.createExport(user.id, projectId, dto.sceneId, dto.resolution);
+    return this.render.createExport(user.id, projectId, dto.resolution, dto.quality, dto.outputFileName);
   }
 
   @Get()
@@ -23,5 +23,10 @@ export class RenderController {
   @Get(":jobId")
   get(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Param("jobId") jobId: string) {
     return this.render.get(user.id, projectId, jobId);
+  }
+
+  @Post(":jobId/cancel")
+  cancel(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Param("jobId") jobId: string) {
+    return this.render.cancel(user.id, projectId, jobId);
   }
 }

@@ -1,15 +1,62 @@
 @import "tailwindcss";
 
+/*
+ * ProCut design tokens. Exact palette from spec — do not adjust these hex
+ * values without checking with the user first, they're load-bearing for the
+ * "professional, not childish" brief.
+ */
+@theme {
+  --color-surface: #090d16; /* main app background */
+  --color-surface-2: #101827; /* secondary background (header, sidebars) */
+  --color-panel: #162033; /* cards, panels, modals */
+  --color-line: #283449; /* borders, dividers */
+
+  --color-brand: #2563eb; /* primary actions, selected clips, active controls */
+  --color-danger: #ef4444; /* cutting, deleting, errors, destructive actions */
+  --color-success: #22c55e; /* successful uploads/processing/exports */
+
+  --color-ink: #f8fafc; /* primary text */
+  --color-ink-muted: #94a3b8; /* secondary text */
+}
+
+/* Aliases for the pre-rebrand ToolMint pages still being migrated to the
+   new editor (see Task #42-44) — keeps them from rendering unstyled while
+   they're rebuilt, without duplicating the palette above. */
 :root {
-  --tm-bg: #0e1512;
-  --tm-surface: #141d19;
-  --tm-text: #e9f3ee;
-  --tm-text-dim: #93a89f;
-  --tm-accent: #35c98f;
-  --tm-line: #223028;
+  --tm-bg: var(--color-surface);
+  --tm-surface: var(--color-panel);
+  --tm-text: var(--color-ink);
+  --tm-text-dim: var(--color-ink-muted);
+  --tm-accent: var(--color-brand);
+  --tm-line: var(--color-line);
 }
 
 body {
-  background: var(--tm-bg);
-  color: var(--tm-text);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-brand) 40%, transparent);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-surface-2);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-line) 70%, var(--color-ink-muted));
 }

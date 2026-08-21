@@ -22,6 +22,14 @@ export interface ProbedMedia {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  // Lets the merge pipeline generate a silent audio segment for sources
+  // with no audio stream instead of referencing a stream that doesn't
+  // exist — defaults true (assume audio present) when probing fails, since
+  // that's the safer failure mode: a real audio track playing under a
+  // wrongly-generated silent one is impossible, but the reverse (silently
+  // dropping real audio because a probe hiccup misreported it) is a much
+  // worse bug to ship.
+  hasAudio: boolean;
   waveformPeaks: number[] | null;
 }
 
@@ -44,14 +52,14 @@ export class MediaProbeService {
   // an in-memory buffer) and cleans it up unconditionally, mirroring the
   // temp-workdir pattern render.processor.ts already uses for the same reason.
   async probe(buffer: Buffer, extensionHint: string, attemptWaveform: boolean): Promise<ProbedMedia> {
-    const workDir = await mkdtemp(join(tmpdir(), "toolmint-probe-"));
+    const workDir = await mkdtemp(join(tmpdir(), "procut-probe-"));
     const filePath = join(workDir, `source.${extensionHint}`);
     try {
       await writeFile(filePath, buffer);
       const [info, waveformPeaks] = await Promise.all([
         this.probeFormat(filePath).catch((err) => {
           this.logger.warn(`ffprobe failed: ${err instanceof Error ? err.message : err}`);
-          return { durationMs: null, width: null, height: null };
+          return { durationMs: null, width: null, height: null, hasAudio: true };
         }),
         // Images/documents can't have an audio track — skip the attempt
         // rather than let it fail-and-be-caught every time.
@@ -81,10 +89,12 @@ export class MediaProbeService {
           const parsed = JSON.parse(stdout) as FfprobeOutput;
           const durationS = parsed.format?.duration ? Number(parsed.format.duration) : null;
           const videoStream = parsed.streams?.find((s) => s.codec_type === "video");
+          const hasAudio = parsed.streams?.some((s) => s.codec_type === "audio") ?? true;
           resolve({
             durationMs: durationS != null && Number.isFinite(durationS) ? Math.round(durationS * 1000) : null,
             width: videoStream?.width ?? null,
             height: videoStream?.height ?? null,
+            hasAudio,
           });
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));

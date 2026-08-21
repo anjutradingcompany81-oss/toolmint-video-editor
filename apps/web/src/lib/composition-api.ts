@@ -1,97 +1,40 @@
 import { apiFetch } from "./api-client";
 
-export type TrackType = "video" | "audio" | "text" | "overlay";
-export type TimelineItemType = "clip" | "audio" | "text";
-
-export interface Transform {
-  x: number;
-  y: number;
-  scale: number;
-  rotation: number;
-  opacity: number;
-}
-
-export type TransitionType = "fade" | "wipeleft" | "wiperight" | "slideup";
-
-export const TRANSITION_TYPE_LABELS: Record<TransitionType, string> = {
-  fade: "Fade",
-  wipeleft: "Wipe left",
-  wiperight: "Wipe right",
-  slideup: "Slide up",
-};
-
-export interface MediaTimelineItem {
+// ProCut's whole editing model: one project = one ordered list of clips.
+// No scenes, no tracks — the merge is always a straight concat of clips in
+// array order, and array order *is* the timeline order.
+export interface Clip {
   id: string;
-  type: "clip" | "audio";
   mediaAssetId: string;
-  startMs: number;
-  durationMs: number;
+  // Offsets into the *source* file — trimOutMs counts back from the
+  // source's own end, so trimIn/trimOut stay valid regardless of how a
+  // later split divides this range.
   trimInMs: number;
   trimOutMs: number;
-  // Meaningful only when this item's startMs overlaps the previous item's
-  // end on the same track — the overlap amount *is* the transition duration
-  // (no separate field for it); this only picks the style. See the
-  // README's "Transitions" section.
-  transitionIn: TransitionType;
-  transform: Transform;
-  // 100 = normal speed. durationMs always stays the timeline footprint;
-  // the amount of source consumed is durationMs * speedPercent/100.
-  speedPercent: number;
-}
-
-// No mediaAssetId — content/style live on the item itself. Rotation is
-// deliberately not editable for text: the render pipeline's drawtext filter
-// has no rotation option, so the preview and the export would disagree.
-export interface TextTimelineItem {
-  id: string;
-  type: "text";
-  content: string;
-  fontSize: number;
-  color: string;
-  startMs: number;
-  durationMs: number;
-  transform: Transform;
-}
-
-export type TimelineItem = MediaTimelineItem | TextTimelineItem;
-
-export interface Track {
-  id: string;
-  type: TrackType;
-  locked: boolean;
+  volume: number;
   muted: boolean;
-  items: TimelineItem[];
 }
 
-export interface Scene {
-  id: string;
-  name: string;
-  durationMs: number;
-  tracks: Track[];
-}
-
-export interface Composition {
+export interface Timeline {
   schemaVersion: "1.0";
-  aspectRatio: string;
-  fps: number;
-  scenes: Scene[];
+  clips: Clip[];
   updatedAt: string;
 }
 
-export interface CompositionEnvelope {
+export interface TimelineEnvelope {
   versionId: string;
-  composition: Composition;
+  composition: Timeline;
   updatedAt: string;
 }
 
 export function getComposition(projectId: string) {
-  return apiFetch<CompositionEnvelope>(`/projects/${projectId}/composition`);
+  return apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`);
 }
 
-export function saveComposition(projectId: string, composition: Composition) {
-  return apiFetch<CompositionEnvelope>(`/projects/${projectId}/composition`, {
+export function saveComposition(projectId: string, timeline: Timeline) {
+  return apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`, {
     method: "POST",
-    body: JSON.stringify(composition),
+    body: JSON.stringify(timeline),
   });
 }
 
@@ -99,67 +42,28 @@ function randomId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function newScene(order: number): Scene {
-  return { id: randomId("scn"), name: `Scene ${order + 1}`, durationMs: 5000, tracks: [] };
+export function newClip(mediaAssetId: string): Clip {
+  return { id: randomId("clip"), mediaAssetId, trimInMs: 0, trimOutMs: 0, volume: 1, muted: false };
 }
 
-export function newTrack(type: TrackType): Track {
-  return { id: randomId("trk"), type, locked: false, muted: false, items: [] };
+// A clip's own playable span after trimming, given the full source
+// duration — clamped so a clip can never shrink to nothing.
+export const MIN_CLIP_DURATION_MS = 200;
+
+export function clipDurationMs(clip: Pick<Clip, "trimInMs" | "trimOutMs">, sourceDurationMs: number): number {
+  return Math.max(MIN_CLIP_DURATION_MS, sourceDurationMs - clip.trimInMs - clip.trimOutMs);
 }
 
-export function defaultTransform(): Transform {
-  return { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
-}
+// Splits one clip into two at `offsetMs` into its own playable span —
+// used by the timeline's split-at-playhead action. Both halves reference
+// the same source media; the cut point becomes the first half's trim-out
+// and the second half's trim-in.
+export function splitClip(clip: Clip, sourceDurationMs: number, offsetMs: number): [Clip, Clip] | null {
+  const duration = clipDurationMs(clip, sourceDurationMs);
+  if (offsetMs < MIN_CLIP_DURATION_MS || offsetMs > duration - MIN_CLIP_DURATION_MS) return null;
 
-export function newTimelineItem(mediaAssetId: string, type: "clip" | "audio", startMs: number, durationMs: number): MediaTimelineItem {
-  return {
-    id: randomId("itm"),
-    type,
-    mediaAssetId,
-    startMs,
-    durationMs,
-    trimInMs: 0,
-    trimOutMs: 0,
-    transitionIn: "fade",
-    transform: defaultTransform(),
-    speedPercent: 100,
-  };
-}
-
-export const DEFAULT_TEXT_CONTENT = "Text";
-export const DEFAULT_TEXT_DURATION_MS = 3000;
-
-export function newTextItem(startMs: number): TextTimelineItem {
-  return {
-    id: randomId("itm"),
-    type: "text",
-    content: DEFAULT_TEXT_CONTENT,
-    fontSize: 48,
-    color: "#ffffff",
-    startMs,
-    durationMs: DEFAULT_TEXT_DURATION_MS,
-    transform: defaultTransform(),
-  };
-}
-
-// A track only accepts media of a compatible kind — matches typical NLE
-// behavior and keeps "what can I drop here" unambiguous without a mixed-kind UI.
-export function trackAcceptsMediaKind(trackType: TrackType, mediaKind: string): boolean {
-  if (trackType === "video") return mediaKind === "VIDEO" || mediaKind === "IMAGE";
-  if (trackType === "audio") return mediaKind === "AUDIO";
-  return false;
-}
-
-export function defaultClipDurationMs(mediaKind: string): number {
-  return mediaKind === "IMAGE" ? 3000 : 5000;
-}
-
-// Mirrors the backend's overlapWithPrevious (render.processor.ts) — the
-// transition duration is never stored explicitly, it's derived from how far
-// an item's startMs reaches back into its predecessor's tail on the same
-// track. `items` must already be sorted by startMs.
-export function overlapWithPreviousMs(items: { startMs: number; durationMs: number }[], index: number): number {
-  if (index <= 0) return 0;
-  const prev = items[index - 1];
-  return Math.max(0, prev.startMs + prev.durationMs - items[index].startMs);
+  const splitSourceMs = clip.trimInMs + offsetMs;
+  const first: Clip = { ...clip, id: randomId("clip"), trimOutMs: sourceDurationMs - splitSourceMs };
+  const second: Clip = { ...clip, id: randomId("clip"), trimInMs: splitSourceMs };
+  return [first, second];
 }

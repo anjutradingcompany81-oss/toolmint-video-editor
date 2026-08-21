@@ -1,91 +1,33 @@
 import { z } from "zod";
 
-// Matches the "Timeline composition JSON specification" in the product spec.
-export const transformSchema = z.object({
-  x: z.number().default(0),
-  y: z.number().default(0),
-  scale: z.number().default(1),
-  rotation: z.number().default(0),
-  opacity: z.number().min(0).max(1).default(1),
-});
-
-// Effect/transition params are added when that module is built — clip/audio/
-// text placement is this increment's scope.
-const timelineItemBase = {
+// ProCut's whole editing model: one project = one ordered list of clips.
+// No scenes, no tracks, no transitions-as-objects, no text overlays — the
+// merge is always a straight concat of clips in array order, and array
+// order *is* the timeline order (no separate startMs to keep in sync).
+export const clipSchema = z.object({
   id: z.string().min(1),
-  startMs: z.number().int().nonnegative(),
-  durationMs: z.number().int().positive(),
-  transform: transformSchema.default({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }),
-};
-
-// The transition's *duration* is never stored explicitly — it's however
-// much this item's startMs overlaps the previous item's end on the same
-// track (see ffmpeg-command.util.ts's checkContiguous, which now allows a
-// bounded overlap instead of rejecting it). Only the *style* needs a field.
-// Meaningless with zero overlap (a plain hard cut), which is why it
-// defaults to "fade" rather than "none" — harmless until an overlap exists.
-export const transitionTypeSchema = z.enum(["fade", "wipeleft", "wiperight", "slideup"]);
-
-const mediaItemFields = {
   mediaAssetId: z.string().min(1),
+  // Offsets into the *source* file — trimOutMs counts back from the
+  // source's own end, not from durationMs, so trimIn/trimOut stay valid
+  // reference points regardless of how a split later divides this range.
   trimInMs: z.number().int().nonnegative().default(0),
   trimOutMs: z.number().int().nonnegative().default(0),
-  transitionIn: transitionTypeSchema.default("fade"),
-  // 100 = normal speed. durationMs always stays the *timeline* footprint
-  // (every other place that reads it — contiguity checks, isActive,
-  // transition offset math — needs that, unchanged); the amount of source
-  // consumed is durationMs * speedPercent/100, computed where needed rather
-  // than stored, so trimIn/trimOut keep meaning "source offsets" exactly as
-  // they did before speed existed.
-  speedPercent: z.number().int().min(25).max(400).default(100),
-};
-
-const clipItemSchema = z.object({ ...timelineItemBase, type: z.literal("clip"), ...mediaItemFields });
-const audioItemSchema = z.object({ ...timelineItemBase, type: z.literal("audio"), ...mediaItemFields });
-
-// Text items aren't backed by a MediaAsset — content/style live on the item
-// itself. Rotation is deliberately not part of the style: the renderer's
-// drawtext filter has no rotation option, so supporting it in the editor
-// would mean the preview and the actual export could disagree — see the
-// README's "Text overlays" section.
-const textItemSchema = z.object({
-  ...timelineItemBase,
-  type: z.literal("text"),
-  content: z.string().min(1).max(500),
-  fontSize: z.number().int().min(8).max(300).default(48),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/, "color must be a #rrggbb hex value")
-    .default("#ffffff"),
-});
-
-export const timelineItemSchema = z.discriminatedUnion("type", [clipItemSchema, audioItemSchema, textItemSchema]);
-
-export const trackSchema = z.object({
-  id: z.string().min(1),
-  type: z.enum(["video", "audio", "text", "overlay"]),
-  locked: z.boolean().default(false),
+  volume: z.number().min(0).max(2).default(1),
   muted: z.boolean().default(false),
-  items: z.array(timelineItemSchema).default([]),
 });
 
-export const sceneSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1).max(200),
-  durationMs: z.number().int().positive(),
-  tracks: z.array(trackSchema).default([]),
-});
-
-export const compositionSchema = z.object({
+export const timelineSchema = z.object({
   schemaVersion: z.literal("1.0"),
-  aspectRatio: z.string().min(1),
-  fps: z.number().int().positive(),
-  scenes: z.array(sceneSchema),
+  clips: z.array(clipSchema).default([]),
   updatedAt: z.string(),
 });
 
-export type Composition = z.infer<typeof compositionSchema>;
-export type Scene = z.infer<typeof sceneSchema>;
-export type Track = z.infer<typeof trackSchema>;
-export type TimelineItem = z.infer<typeof timelineItemSchema>;
-export type Transform = z.infer<typeof transformSchema>;
+export type Clip = z.infer<typeof clipSchema>;
+export type Timeline = z.infer<typeof timelineSchema>;
+
+// Kept as the exported name every existing caller (composition.service.ts,
+// composition.controller.ts) already imports — renaming those too would
+// touch the route/persistence layer for no reason, since it stays
+// generically "whatever JSON blob is currently valid" either way.
+export const compositionSchema = timelineSchema;
+export type Composition = Timeline;

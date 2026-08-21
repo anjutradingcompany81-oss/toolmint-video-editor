@@ -66,7 +66,7 @@ export class AuthService {
   // minus the email/password step.
   async guest(): Promise<AuthResult> {
     const suffix = randomBytes(4).toString("hex");
-    const email = `guest_${suffix}@guest.toolmint.local`;
+    const email = `guest_${suffix}@guest.procut.local`;
     const displayName = `Guest ${suffix.slice(0, 4).toUpperCase()}`;
     const passwordHash = await bcrypt.hash(randomBytes(24).toString("hex"), BCRYPT_ROUNDS);
 
@@ -181,7 +181,7 @@ export class AuthService {
     const resetUrl = `${this.config.getOrThrow<string>("WEB_APP_URL")}/reset-password?token=${token}`;
     await this.mail.send({
       to: user.email,
-      subject: "Reset your ToolMint password",
+      subject: "Reset your ProCut password",
       text: `Reset your password: ${resetUrl}\nThis link expires in 1 hour. If you didn't request this, ignore this email.`,
     });
   }
@@ -208,7 +208,7 @@ export class AuthService {
   }
 
   private async getOrCreateTestUser(): Promise<User> {
-    const email = "test@toolmint.local";
+    const email = "test@procut.local";
     const existing = await this.users.findByEmail(email);
     if (existing) return existing;
 
@@ -258,7 +258,7 @@ export class AuthService {
     const verifyUrl = `${this.config.getOrThrow<string>("WEB_APP_URL")}/verify-email?token=${token}`;
     await this.mail.send({
       to: user.email,
-      subject: "Verify your ToolMint account",
+      subject: "Verify your ProCut account",
       text: `Confirm your email: ${verifyUrl}\nThis link expires in 24 hours.`,
     });
   }

@@ -24,7 +24,7 @@ describe("HealthController", () => {
     const result = await controller.check();
 
     expect(result.status).toBe("ok");
-    expect(result.service).toBe("toolmint-api");
+    expect(result.service).toBe("procut-api");
   });
 
   it("raises a 503 when the database is unreachable", async () => {

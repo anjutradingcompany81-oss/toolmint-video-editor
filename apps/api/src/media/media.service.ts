@@ -29,9 +29,17 @@ export class MediaService {
     const kind = resolveMediaKind(file.mimetype);
     if (!kind) throw new BadRequestException(`Unsupported file type: ${file.mimetype}`);
 
-    const rule = MEDIA_RULES[kind];
+    // Non-null: resolveMediaKind only returns a kind whose rule actually
+    // matched this mimetype, so the corresponding entry always exists here.
+    const rule = MEDIA_RULES[kind]!;
     if (file.size > rule.maxBytes) {
       throw new BadRequestException(`${kind.toLowerCase()} uploads are limited to ${Math.floor(rule.maxBytes / (1024 * 1024))}MB`);
+    }
+
+    const checksum = createHash("sha256").update(file.buffer).digest("hex");
+    const existing = await this.prisma.mediaAsset.findFirst({ where: { projectId, checksum } });
+    if (existing) {
+      throw new BadRequestException(`This file was already uploaded as "${existing.originalName}"`);
     }
 
     const assetId = randomUUID();
@@ -47,7 +55,7 @@ export class MediaService {
         storageKey,
         mimeType: file.mimetype,
         byteSize: file.size,
-        checksum: createHash("sha256").update(file.buffer).digest("hex"),
+        checksum,
         uploadedById: userId,
       },
     });
@@ -63,10 +71,11 @@ export class MediaService {
     // meaningfully better (real trim limits, real waveforms) but a probe
     // failure shouldn't fail the upload itself; the asset still becomes
     // READY with those fields left null.
-    let probed: { durationMs: number | null; width: number | null; height: number | null; waveformPeaks: number[] | null } = {
+    let probed: { durationMs: number | null; width: number | null; height: number | null; hasAudio: boolean; waveformPeaks: number[] | null } = {
       durationMs: null,
       width: null,
       height: null,
+      hasAudio: true,
       waveformPeaks: null,
     };
     if (kind !== "DOCUMENT") {
@@ -85,6 +94,7 @@ export class MediaService {
         durationMs: probed.durationMs,
         width: probed.width,
         height: probed.height,
+        hasAudio: probed.hasAudio,
         // Prisma's typed Json column needs the sentinel Prisma.JsonNull for
         // an actual null value — a bare `null` there means "leave the
         // column untouched," not "clear it."

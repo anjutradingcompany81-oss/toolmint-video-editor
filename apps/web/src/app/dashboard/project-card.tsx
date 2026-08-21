@@ -2,13 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import {
-  ASPECT_RATIO_LABELS,
-  deleteProject,
-  duplicateProject,
-  updateProject,
-  type Project,
-} from "@/lib/projects-api";
+import { deleteProject, duplicateProject, updateProject, type Project } from "@/lib/projects-api";
 import { ApiError } from "@/lib/api-client";
 import { ArchiveIcon, ClapperboardIcon, CopyIcon, PencilIcon, TrashIcon } from "@/components/icons";
 
@@ -18,20 +12,6 @@ interface ProjectCardProps {
   onDuplicated: (project: Project) => void;
   onDeleted: (id: string) => void;
 }
-
-// Real per-project thumbnails would need a rendered frame from the
-// composition (project.thumbnailUrl exists in the schema for exactly that,
-// but nothing generates one yet) — until then, a ratio-accurate placeholder
-// swatch at least shows the project's shape at a glance, like Filmora's
-// grid does with real frames.
-const ASPECT_BOX: Record<Project["aspectRatio"], string> = {
-  RATIO_16_9: "aspect-[16/9]",
-  RATIO_9_16: "aspect-[9/16]",
-  RATIO_1_1: "aspect-square",
-  RATIO_4_5: "aspect-[4/5]",
-  RATIO_21_9: "aspect-[21/9]",
-  CUSTOM: "aspect-video",
-};
 
 export default function ProjectCard({ project, onChanged, onDuplicated, onDeleted }: ProjectCardProps) {
   const [renaming, setRenaming] = useState(false);
@@ -88,16 +68,16 @@ export default function ProjectCard({ project, onChanged, onDuplicated, onDelete
   }
 
   return (
-    <div className="group flex flex-col overflow-hidden rounded-lg border border-[var(--tm-line)] bg-[var(--tm-surface)] transition-colors hover:border-[var(--tm-accent)]/60">
-      <Link href={`/dashboard/${project.id}`} className={`relative flex items-center justify-center bg-black/40 ${ASPECT_BOX[project.aspectRatio]}`}>
+    <div className="group flex flex-col overflow-hidden rounded-lg border border-line bg-panel transition-colors hover:border-brand/60">
+      <Link href={`/dashboard/${project.id}/edit`} className="relative flex aspect-video items-center justify-center bg-surface">
         {project.thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={project.thumbnailUrl} alt="" className="h-full w-full object-cover" />
         ) : (
-          <ClapperboardIcon width={28} height={28} className="text-[var(--tm-text-dim)]" />
+          <ClapperboardIcon width={28} height={28} className="text-ink-muted" />
         )}
         {project.isArchived && (
-          <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--tm-text-dim)]">
+          <span className="absolute left-2 top-2 rounded-full bg-surface/90 px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-muted">
             Archived
           </span>
         )}
@@ -108,7 +88,7 @@ export default function ProjectCard({ project, onChanged, onDuplicated, onDelete
           <div className="flex gap-2">
             <input
               autoFocus
-              className="w-full rounded border border-[var(--tm-line)] bg-[var(--tm-bg)] px-2 py-1 text-sm"
+              className="w-full rounded border border-line bg-surface px-2 py-1 text-sm"
               value={titleDraft}
               maxLength={200}
               onChange={(e) => setTitleDraft(e.target.value)}
@@ -120,35 +100,33 @@ export default function ProjectCard({ project, onChanged, onDuplicated, onDelete
                 }
               }}
             />
-            <button onClick={saveRename} disabled={busy} className="shrink-0 text-xs text-[var(--tm-accent)]">
+            <button onClick={saveRename} disabled={busy} className="shrink-0 text-xs text-brand">
               Save
             </button>
           </div>
         ) : (
-          <Link href={`/dashboard/${project.id}`} className="truncate text-sm font-medium hover:underline">
+          <Link href={`/dashboard/${project.id}/edit`} className="truncate text-sm font-medium hover:underline">
             {project.title}
           </Link>
         )}
 
-        <p className="text-xs text-[var(--tm-text-dim)]">
-          {ASPECT_RATIO_LABELS[project.aspectRatio]} · updated {new Date(project.updatedAt).toLocaleDateString()}
-        </p>
+        <p className="text-xs text-ink-muted">updated {new Date(project.updatedAt).toLocaleDateString()}</p>
 
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-danger">{error}</p>}
 
-        <div className="mt-auto flex items-center gap-3 pt-1 text-[var(--tm-text-dim)] opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="mt-auto flex items-center gap-3 pt-1 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           {!renaming && (
-            <button disabled={busy} onClick={() => setRenaming(true)} title="Rename" className="hover:text-[var(--tm-text)]">
+            <button disabled={busy} onClick={() => setRenaming(true)} title="Rename" className="hover:text-ink">
               <PencilIcon />
             </button>
           )}
-          <button disabled={busy} onClick={toggleArchive} title={project.isArchived ? "Unarchive" : "Archive"} className="hover:text-[var(--tm-text)]">
+          <button disabled={busy} onClick={toggleArchive} title={project.isArchived ? "Unarchive" : "Archive"} className="hover:text-ink">
             <ArchiveIcon />
           </button>
-          <button disabled={busy} onClick={handleDuplicate} title="Duplicate" className="hover:text-[var(--tm-text)]">
+          <button disabled={busy} onClick={handleDuplicate} title="Duplicate" className="hover:text-ink">
             <CopyIcon />
           </button>
-          <button disabled={busy} onClick={handleDelete} title="Delete" className="ml-auto hover:text-red-400">
+          <button disabled={busy} onClick={handleDelete} title="Delete" className="ml-auto hover:text-danger">
             <TrashIcon />
           </button>
         </div>

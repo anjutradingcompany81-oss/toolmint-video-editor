@@ -19,15 +19,6 @@ enum MembershipRole {
   VIEWER
 }
 
-enum ProjectAspectRatio {
-  RATIO_16_9
-  RATIO_9_16
-  RATIO_1_1
-  RATIO_4_5
-  RATIO_21_9
-  CUSTOM
-}
-
 enum MediaAssetKind {
   VIDEO
   IMAGE
@@ -45,6 +36,15 @@ enum MediaAssetStatus {
 enum ExportResolution {
   R720P
   R1080P
+  // Canvas shape taken from the first clip's own source dimensions instead
+  // of a fixed preset.
+  ORIGINAL
+}
+
+enum ExportQuality {
+  STANDARD
+  HIGH
+  MAXIMUM
 }
 
 enum ExportStatus {
@@ -53,6 +53,7 @@ enum ExportStatus {
   UPLOADING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 model User {
@@ -151,9 +152,10 @@ model Project {
   workspaceId   String
   workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   title         String
-  aspectRatio   ProjectAspectRatio @default(RATIO_16_9)
-  customWidth   Int?
-  customHeight  Int?
+  // Normalization target for merging clips of different frame rates — not
+  // a user-facing "project format" choice; there's no upfront aspect-ratio
+  // picker in this editor, the canvas shape is derived from the clips
+  // themselves at export time (see ExportResolution.ORIGINAL).
   fps           Int                @default(30)
   // Storage key, not a URL — presigned into thumbnailUrl at response time
   // (same pattern as MediaAsset.storageKey/previewUrl), since the bucket
@@ -202,6 +204,10 @@ model MediaAsset {
   durationMs  Int?
   width       Int?
   height      Int?
+  // Probed at upload time — lets the merge pipeline generate a silent audio
+  // segment for sources with no audio stream instead of erroring out (the
+  // concat filter needs a uniform stream count across every segment).
+  hasAudio    Boolean           @default(true)
   // Flat array of [min0, max0, min1, max1, ...] floats in -1..1, fixed at
   // 200 buckets regardless of clip length — the timeline stretches this to
   // whatever pixel width the clip occupies. Null for images/documents, or
@@ -219,12 +225,18 @@ model ExportJob {
   id                String           @id @default(cuid())
   projectId         String
   project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  // Renders one scene at a time — full multi-scene project stitching is a
-  // later increment, not this one.
-  sceneId           String
   resolution        ExportResolution
+  quality           ExportQuality    @default(STANDARD)
+  // User-chosen download filename (sanitized before use) — defaults to the
+  // project title if left blank, never used to build a shell command or
+  // filesystem path directly.
+  outputFileName    String?
   status            ExportStatus     @default(QUEUED)
   progress          Int              @default(0)
+  // Set only when a user clicks Cancel — the worker polls this between
+  // clip stages and exits cleanly instead of continuing to burn CPU on a
+  // render nobody wants anymore.
+  cancelRequested   Boolean          @default(false)
   errorMessage      String?
   outputStorageKey  String?
   outputByteSize    Int?

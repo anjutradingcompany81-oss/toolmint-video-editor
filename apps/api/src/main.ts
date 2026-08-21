@@ -28,7 +28,7 @@ async function bootstrap() {
   // bind to it; API_PORT is what local dev / .env.example use instead.
   const port = config.get<number>("PORT") ?? config.get<number>("API_PORT", 4000);
   await app.listen(port);
-  console.log(`ToolMint API listening on http://localhost:${port}`);
+  console.log(`ProCut API listening on http://localhost:${port}`);
 }
 
 bootstrap();
