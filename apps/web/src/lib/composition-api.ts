@@ -67,3 +67,78 @@ export function splitClip(clip: Clip, sourceDurationMs: number, offsetMs: number
   const second: Clip = { ...clip, id: randomId("clip"), trimInMs: splitSourceMs };
   return [first, second];
 }
+
+export type RemoveRangeResult = { ok: true; clips: Clip[] } | { ok: false; message: string };
+
+// "Cut unwanted middle portion": removes an absolute timeline range
+// [startMs, endMs) from the whole clip array, splitting/trimming/dropping
+// whichever clips it overlaps. Because ProCut's timeline has no absolute
+// clip positions — array order alone *is* the timeline order — the result
+// is automatically contiguous with no gap to close: this is what "ripple
+// delete" means here, and it's the only delete behavior this data model
+// can represent (a gap-leaving "standard delete" would need clips to carry
+// their own absolute start time, which they deliberately don't).
+//
+// Each clip is handled independently by intersecting its own timeline span
+// with the cut range and mapping that intersection back into *source* time
+// (via its current trimIn/trimOut): a clip with no overlap is untouched, a
+// clip fully inside the cut range is dropped, a clip overlapping only one
+// edge is trimmed on that side, and a clip that fully contains the cut
+// range is split in two — the exact "remove the unwanted middle of this
+// one clip" case the feature is named for.
+export function removeRange(clips: Clip[], sourceDurationOf: (clip: Clip) => number, startMs: number, endMs: number): RemoveRangeResult {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) {
+    return { ok: false, message: "Select a valid start and end point before cutting." };
+  }
+
+  const next: Clip[] = [];
+  let cursor = 0;
+  let touchedAnything = false;
+
+  for (const clip of clips) {
+    const sourceDurationMs = sourceDurationOf(clip);
+    const durationMs = clipDurationMs(clip, sourceDurationMs);
+    const clipStart = cursor;
+    const clipEnd = cursor + durationMs;
+    cursor = clipEnd;
+
+    const overlapStart = Math.max(clipStart, startMs);
+    const overlapEnd = Math.min(clipEnd, endMs);
+
+    if (overlapStart >= overlapEnd) {
+      next.push(clip);
+      continue;
+    }
+    touchedAnything = true;
+
+    const srcIn = clip.trimInMs;
+    const srcOut = sourceDurationMs - clip.trimOutMs;
+    const srcOverlapStart = srcIn + (overlapStart - clipStart);
+    const srcOverlapEnd = srcIn + (overlapEnd - clipStart);
+
+    const leftDurationMs = srcOverlapStart - srcIn;
+    const rightDurationMs = srcOut - srcOverlapEnd;
+    const keepsLeft = leftDurationMs >= MIN_CLIP_DURATION_MS;
+    const keepsRight = rightDurationMs >= MIN_CLIP_DURATION_MS;
+
+    if (keepsLeft && keepsRight) {
+      // The cut range falls entirely inside this one clip — split it in
+      // two, same as a manual split-at-playhead on each edge.
+      next.push({ ...clip, id: randomId("clip"), trimOutMs: sourceDurationMs - srcOverlapStart });
+      next.push({ ...clip, id: randomId("clip"), trimInMs: srcOverlapEnd });
+    } else if (keepsLeft) {
+      // Only trimming one edge — same clip, just shorter, so it keeps its
+      // id (matches how drag-to-trim already behaves elsewhere).
+      next.push({ ...clip, trimOutMs: sourceDurationMs - srcOverlapStart });
+    } else if (keepsRight) {
+      next.push({ ...clip, trimInMs: srcOverlapEnd });
+    }
+    // Neither side survives — the clip is fully consumed by the cut, drop it.
+  }
+
+  if (!touchedAnything) {
+    return { ok: false, message: "The selected range doesn't overlap any clip on the timeline." };
+  }
+
+  return { ok: true, clips: next };
+}

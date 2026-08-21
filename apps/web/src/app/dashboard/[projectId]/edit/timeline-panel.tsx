@@ -22,9 +22,36 @@ function ZoomOutIcon() {
     </svg>
   );
 }
+function MarkInIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 3.5v13" />
+      <path d="M5 10h10.5M12 6.5l3.5 3.5-3.5 3.5" />
+    </svg>
+  );
+}
+function MarkOutIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 3.5v13" />
+      <path d="M15 10H4.5M8 6.5L4.5 10l3.5 3.5" />
+    </svg>
+  );
+}
+function RazorIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4l12 12M16 4L11.2 8.8" />
+      <circle cx="5.5" cy="14.5" r="1.8" />
+    </svg>
+  );
+}
 
 const MIN_PPS = 10;
 const MAX_PPS = 300;
+// Smallest gap allowed between the In and Out marks while dragging a
+// selection handle — keeps the range from being dragged past itself.
+const MIN_SELECTION_GAP_MS = 100;
 
 interface TimelinePanelProps {
   layout: ClipLayoutEntry[];
@@ -40,6 +67,17 @@ interface TimelinePanelProps {
   onSplit: () => void;
   onDeleteSelected: () => void;
   splitDisabled: boolean;
+  markInMs: number | null;
+  markOutMs: number | null;
+  hasMarkedRange: boolean;
+  onMarkIn: () => void;
+  onMarkOut: () => void;
+  onAdjustMarkIn: (ms: number) => void;
+  onAdjustMarkOut: (ms: number) => void;
+  onCutSelection: () => void;
+  razorMode: boolean;
+  onToggleRazorMode: () => void;
+  onRazorClick: (ms: number) => void;
 }
 
 export default function TimelinePanel({
@@ -56,11 +94,23 @@ export default function TimelinePanel({
   onSplit,
   onDeleteSelected,
   splitDisabled,
+  markInMs,
+  markOutMs,
+  hasMarkedRange,
+  onMarkIn,
+  onMarkOut,
+  onAdjustMarkIn,
+  onAdjustMarkOut,
+  onCutSelection,
+  razorMode,
+  onToggleRazorMode,
+  onRazorClick,
 }: TimelinePanelProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragFromIndex = useRef<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const scrubbing = useRef(false);
+  const selectionDrag = useRef<"start" | "end" | null>(null);
 
   const snapPoints = useMemo(() => {
     const points = [0, totalDurationMs, playheadMs];
@@ -74,12 +124,17 @@ export default function TimelinePanel({
     const rect = trackRef.current?.getBoundingClientRect();
     if (!rect) return 0;
     const px = clientX - rect.left + (trackRef.current?.scrollLeft ?? 0);
-    return Math.max(0, (px / pixelsPerSecond) * 1000);
+    return Math.max(0, Math.min(totalDurationMs, (px / pixelsPerSecond) * 1000));
   }
 
   function handleTrackPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const ms = msFromClientX(e.clientX);
+    if (razorMode) {
+      onRazorClick(ms);
+      return;
+    }
     scrubbing.current = true;
-    onSeek(msFromClientX(e.clientX));
+    onSeek(ms);
   }
   function handleTrackPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!scrubbing.current) return;
@@ -87,6 +142,28 @@ export default function TimelinePanel({
   }
   function handleTrackPointerUp() {
     scrubbing.current = false;
+  }
+
+  function handleSelectionHandlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.stopPropagation();
+    const edge = e.currentTarget.dataset.edge as "start" | "end";
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    selectionDrag.current = edge;
+  }
+  function handleSelectionHandlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const edge = selectionDrag.current;
+    if (!edge) return;
+    const ms = msFromClientX(e.clientX);
+    if (edge === "start") {
+      const max = markOutMs !== null ? markOutMs - MIN_SELECTION_GAP_MS : totalDurationMs;
+      onAdjustMarkIn(Math.max(0, Math.min(ms, max)));
+    } else {
+      const min = markInMs !== null ? markInMs + MIN_SELECTION_GAP_MS : 0;
+      onAdjustMarkOut(Math.min(totalDurationMs, Math.max(ms, min)));
+    }
+  }
+  function handleSelectionHandlePointerUp() {
+    selectionDrag.current = null;
   }
 
   function handleDrop() {
@@ -110,9 +187,18 @@ export default function TimelinePanel({
   const contentWidth = Math.max(600, (totalDurationMs / 1000) * pixelsPerSecond + 100);
   const playheadX = (playheadMs / 1000) * pixelsPerSecond;
 
+  // The in-progress selection: once In is marked, show a preview strip
+  // running to the current playhead even before Out is marked, so the
+  // range being built is always visible.
+  const selectionStartMs = markInMs;
+  const selectionEndMs = markOutMs ?? (markInMs !== null ? playheadMs : null);
+  const hasSelectionPreview = selectionStartMs !== null && selectionEndMs !== null && selectionEndMs > selectionStartMs;
+  const selectionLeftX = hasSelectionPreview ? (selectionStartMs! / 1000) * pixelsPerSecond : 0;
+  const selectionWidthPx = hasSelectionPreview ? ((selectionEndMs! - selectionStartMs!) / 1000) * pixelsPerSecond : 0;
+
   return (
     <div className="flex h-64 shrink-0 flex-col border-t border-line bg-surface-2">
-      <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
         <button
           onClick={onSplit}
           disabled={splitDisabled}
@@ -122,13 +208,55 @@ export default function TimelinePanel({
           <ScissorsIcon width={14} height={14} /> Split
         </button>
         <button
+          onClick={onToggleRazorMode}
+          title="Razor tool — click the timeline to split there"
+          aria-pressed={razorMode}
+          className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+            razorMode ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          <RazorIcon /> Razor
+        </button>
+
+        <span className="mx-1 h-5 w-px bg-line" />
+
+        <button
+          onClick={onMarkIn}
+          title="Mark start of unwanted section (I)"
+          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-ink hover:border-brand"
+        >
+          <MarkInIcon /> Mark In
+        </button>
+        <button
+          onClick={onMarkOut}
+          title="Mark end of unwanted section (O)"
+          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-ink hover:border-brand"
+        >
+          <MarkOutIcon /> Mark Out
+        </button>
+        <button
+          onClick={onCutSelection}
+          disabled={!hasMarkedRange}
+          title="Cut the selected section and join the remainder (Delete)"
+          className="flex items-center gap-1 rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-ink hover:bg-danger/90 disabled:bg-line disabled:text-ink-muted"
+        >
+          <TrashIcon width={12} height={12} /> Cut Selected Portion
+        </button>
+
+        <button
           onClick={onDeleteSelected}
           disabled={!selectedClipId}
           title="Delete selected clip (Delete)"
           className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-danger hover:border-danger disabled:opacity-30 disabled:text-ink-muted"
         >
-          <TrashIcon width={12} height={12} /> Delete
+          <TrashIcon width={12} height={12} /> Delete clip
         </button>
+
+        {hasMarkedRange && (
+          <span className="font-mono text-xs tabular-nums text-ink-muted">
+            {formatTimecode(markInMs!, true)} – {formatTimecode(markOutMs!, true)} ({formatTimecode(markOutMs! - markInMs!, true)})
+          </span>
+        )}
 
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-muted">{formatTimecode(playheadMs, true)}</span>
 
@@ -159,9 +287,15 @@ export default function TimelinePanel({
         <div
           ref={trackRef}
           onPointerDown={handleTrackPointerDown}
-          onPointerMove={handleTrackPointerMove}
-          onPointerUp={handleTrackPointerUp}
-          className="relative flex-1 cursor-text overflow-x-auto overflow-y-hidden px-2 pt-6"
+          onPointerMove={(e) => {
+            handleTrackPointerMove(e);
+            handleSelectionHandlePointerMove(e);
+          }}
+          onPointerUp={() => {
+            handleTrackPointerUp();
+            handleSelectionHandlePointerUp();
+          }}
+          className={`relative flex-1 overflow-x-auto overflow-y-hidden px-2 pt-6 ${razorMode ? "cursor-crosshair" : "cursor-text"}`}
         >
           <div style={{ width: contentWidth, position: "relative" }}>
             {/* Ruler */}
@@ -197,11 +331,34 @@ export default function TimelinePanel({
               ))}
             </div>
 
+            {/* Unwanted-section selection: highlighted range with
+                draggable edge handles, shown as soon as In is marked
+                (previewing to the playhead) and finalized once Out is
+                marked too. */}
+            {hasSelectionPreview && (
+              <div
+                className={`absolute bottom-0 top-0 z-20 border-x-2 ${
+                  markOutMs !== null ? "border-danger bg-danger/25" : "border-danger/60 bg-danger/10"
+                }`}
+                style={{ left: selectionLeftX, width: Math.max(2, selectionWidthPx) }}
+              >
+                <div
+                  data-edge="start"
+                  onPointerDown={handleSelectionHandlePointerDown}
+                  title="Drag to adjust the start of the selection"
+                  className="absolute inset-y-0 left-0 z-20 w-2.5 -translate-x-1/2 cursor-ew-resize"
+                />
+                <div
+                  data-edge="end"
+                  onPointerDown={handleSelectionHandlePointerDown}
+                  title="Drag to adjust the end of the selection"
+                  className="absolute inset-y-0 right-0 z-20 w-2.5 translate-x-1/2 cursor-ew-resize"
+                />
+              </div>
+            )}
+
             {/* Playhead */}
-            <div
-              className="pointer-events-none absolute -top-6 bottom-0 z-30 w-px bg-brand"
-              style={{ left: playheadX }}
-            >
+            <div className="pointer-events-none absolute -top-6 bottom-0 z-30 w-px bg-brand" style={{ left: playheadX }}>
               <div className="absolute -top-1 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 bg-brand" />
             </div>
           </div>

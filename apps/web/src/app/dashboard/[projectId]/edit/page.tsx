@@ -6,15 +6,22 @@ import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
-import { newClip, splitClip, clipDurationMs } from "@/lib/composition-api";
+import { newClip, splitClip, clipDurationMs, removeRange, type Clip } from "@/lib/composition-api";
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
 import PreviewPanel from "./preview-panel";
 import TimelinePanel from "./timeline-panel";
 import PropertiesPanel from "./properties-panel";
 import ExportModal from "./export-modal";
+import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
+const MESSAGE_TIMEOUT_MS = 4000;
+
+export interface EditorMessage {
+  text: string;
+  tone: "info" | "success" | "error";
+}
 
 // Non-text inputs (range sliders, checkboxes) shouldn't swallow editor
 // shortcuts just because they happen to hold focus — a user who just
@@ -43,6 +50,13 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
   const [exportOpen, setExportOpen] = useState(false);
 
+  // "Cut unwanted middle portion" — an in/out selection independent of clip
+  // boundaries, marked on the whole timeline rather than on one clip.
+  const [markInMs, setMarkInMs] = useState<number | null>(null);
+  const [markOutMs, setMarkOutMs] = useState<number | null>(null);
+  const [razorMode, setRazorMode] = useState(false);
+  const [message, setMessage] = useState<EditorMessage | null>(null);
+
   useEffect(() => {
     if (status !== "authenticated") return;
     let cancelled = false;
@@ -59,6 +73,16 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   }, [status, projectId]);
 
   const mediaById = useMemo(() => new Map(media.map((m) => [m.id, m])), [media]);
+
+  // Same fallback (0 for an unresolved/still-processing asset) the layout
+  // memo below uses, so cut/split math never disagrees with what's drawn.
+  const sourceDurationOfClip = useCallback((clip: Clip) => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, [mediaById]);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(null), MESSAGE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   const layout: ClipLayoutEntry[] = useMemo(() => {
     const entries: ClipLayoutEntry[] = [];
@@ -152,27 +176,127 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips],
   );
 
-  const splitAtPlayhead = useCallback(() => {
-    const entry = layout.find((e) => player.playheadMs > e.startMs && player.playheadMs < e.startMs + e.durationMs);
-    if (!entry || !entry.asset?.durationMs) return;
-    const offsetMs = player.playheadMs - entry.startMs;
-    const result = splitClip(entry.clip, entry.asset.durationMs, offsetMs);
-    if (!result) return;
-    const [first, second] = result;
-    withClips((prev) => {
-      const index = prev.findIndex((c) => c.id === entry.clip.id);
-      if (index === -1) return prev;
-      const next = [...prev];
-      next.splice(index, 1, first, second);
-      return next;
-    });
-    setSelectedClipId(second.id);
-  }, [layout, player.playheadMs, withClips]);
+  // Shared by "Split at playhead" (S / the Split button) and razor-mode
+  // clicks on the timeline — the only difference is which ms position they
+  // pass in.
+  const splitAt = useCallback(
+    (atMs: number) => {
+      const entry = layout.find((e) => atMs > e.startMs && atMs < e.startMs + e.durationMs);
+      if (!entry || !entry.asset?.durationMs) {
+        setMessage({ text: "Move the playhead inside a clip before splitting.", tone: "error" });
+        return;
+      }
+      const offsetMs = atMs - entry.startMs;
+      const result = splitClip(entry.clip, entry.asset.durationMs, offsetMs);
+      if (!result) {
+        setMessage({ text: "Too close to the edge of this clip to split here.", tone: "error" });
+        return;
+      }
+      const [first, second] = result;
+      withClips((prev) => {
+        const index = prev.findIndex((c) => c.id === entry.clip.id);
+        if (index === -1) return prev;
+        const next = [...prev];
+        next.splice(index, 1, first, second);
+        return next;
+      });
+      setSelectedClipId(second.id);
+    },
+    [layout, withClips],
+  );
 
+  const splitAtPlayhead = useCallback(() => splitAt(player.playheadMs), [splitAt, player.playheadMs]);
   const canSplit = layout.some((e) => player.playheadMs > e.startMs && player.playheadMs < e.startMs + e.durationMs);
 
-  // Keyboard shortcuts — see spec: Space, S, Delete, Ctrl/Cmd+Z,
-  // Ctrl/Cmd+Shift+Z, arrows, Ctrl/Cmd +/-.
+  // Razor/blade tool: while active, clicking the timeline (not a trim
+  // handle) splits at that exact point in one gesture instead of
+  // seek-then-press-S.
+  const handleRazorClick = useCallback(
+    (atMs: number) => {
+      player.seekTo(atMs);
+      splitAt(atMs);
+    },
+    [player, splitAt],
+  );
+
+  // "Cut unwanted middle portion" — In/Out marks are independent of clip
+  // boundaries, so validation happens against the whole timeline's current
+  // total duration, not any one clip.
+  const markIn = useCallback(() => {
+    if (totalDurationMs === 0) {
+      setMessage({ text: "Add a clip to the timeline first.", tone: "error" });
+      return;
+    }
+    const ms = Math.min(player.playheadMs, totalDurationMs);
+    setMarkInMs(ms);
+    setMarkOutMs((prevOut) => (prevOut !== null && prevOut <= ms ? null : prevOut));
+    setMessage({ text: `Start marked at ${formatTimecode(ms, true)}.`, tone: "info" });
+  }, [player.playheadMs, totalDurationMs]);
+
+  const markOut = useCallback(() => {
+    if (markInMs === null) {
+      setMessage({ text: "Select the beginning and end of the unwanted section.", tone: "error" });
+      return;
+    }
+    const ms = Math.min(player.playheadMs, totalDurationMs);
+    if (ms <= markInMs) {
+      setMessage({ text: "The end point must be after the start point.", tone: "error" });
+      return;
+    }
+    setMarkOutMs(ms);
+    setMessage({ text: `End marked at ${formatTimecode(ms, true)}.`, tone: "info" });
+  }, [markInMs, player.playheadMs, totalDurationMs]);
+
+  const clearMarks = useCallback(() => {
+    setMarkInMs(null);
+    setMarkOutMs(null);
+  }, []);
+
+  const hasMarkedRange = markInMs !== null && markOutMs !== null && markOutMs > markInMs;
+
+  // The only delete this data model can represent: clips are always
+  // concatenated back-to-back with no absolute positions, so removing a
+  // range (or a whole clip) is inherently a ripple delete — there's no
+  // gap to leave behind, and so no separate "standard delete" mode exists.
+  const cutSelection = useCallback(() => {
+    if (markInMs === null || markOutMs === null || markOutMs <= markInMs) {
+      setMessage({ text: "Select the beginning and end of the unwanted section.", tone: "error" });
+      return;
+    }
+    const durationMs = markOutMs - markInMs;
+    const confirmed = window.confirm(
+      `Remove the selected section (${formatTimecode(markInMs, true)}–${formatTimecode(markOutMs, true)}, ${formatTimecode(durationMs, true)} long)? The remaining parts will join automatically with no gap.`,
+    );
+    if (!confirmed) return;
+
+    const result = removeRange(clips, sourceDurationOfClip, markInMs, markOutMs);
+    if (!result.ok) {
+      setMessage({ text: result.message, tone: "error" });
+      return;
+    }
+    withClips(() => result.clips);
+    setSelectedClipId(null);
+    clearMarks();
+    player.seekTo(markInMs);
+    setMessage({ text: "Selected portion removed successfully. The original video remains unchanged.", tone: "success" });
+  }, [markInMs, markOutMs, clips, sourceDurationOfClip, withClips, clearMarks, player]);
+
+  // Delete / Backspace / Shift+Delete: a marked range takes priority over
+  // a selected clip. Shift+Delete is offered as the familiar "ripple
+  // delete" shortcut from other editors, but is otherwise identical to
+  // plain Delete here — ripple is the only delete this timeline has.
+  const handleDeleteKey = useCallback(() => {
+    if (hasMarkedRange) {
+      cutSelection();
+    } else if (selectedClipId) {
+      deleteClip(selectedClipId);
+    } else {
+      setMessage({ text: "Select a clip, or mark a start and end point, before deleting.", tone: "error" });
+    }
+  }, [hasMarkedRange, cutSelection, selectedClipId, deleteClip]);
+
+  // Keyboard shortcuts — see spec: Space, S, I, O, Delete, Shift+Delete,
+  // Ctrl/Cmd+Z, Ctrl/Cmd+Y, Ctrl/Cmd+Shift+Z, arrows, Ctrl/Cmd +/-.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (isTypingTarget(e.target)) return;
@@ -181,13 +305,17 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
       if (e.code === "Space" || e.key === " " || e.key === "Spacebar") {
         e.preventDefault();
         player.togglePlay();
-      } else if (e.key === "s" || e.key === "S") {
-        if (!mod) splitAtPlayhead();
+      } else if ((e.key === "s" || e.key === "S") && !mod) {
+        splitAtPlayhead();
+      } else if ((e.key === "i" || e.key === "I") && !mod) {
+        e.preventDefault();
+        markIn();
+      } else if ((e.key === "o" || e.key === "O") && !mod) {
+        e.preventDefault();
+        markOut();
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedClipId) {
-          e.preventDefault();
-          deleteClip(selectedClipId);
-        }
+        e.preventDefault();
+        handleDeleteKey();
       } else if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -211,7 +339,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [player, splitAtPlayhead, selectedClipId, deleteClip, undo, redo, project?.fps]);
+  }, [player, splitAtPlayhead, markIn, markOut, handleDeleteKey, undo, redo, project?.fps]);
 
   if (status !== "authenticated" || loading || !mediaLoaded) {
     return <main className="flex min-h-screen items-center justify-center bg-surface text-sm text-ink-muted">Loading…</main>;
@@ -229,7 +357,22 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-surface">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-surface">
+      {message && (
+        <div
+          role="status"
+          className={`pointer-events-none absolute left-1/2 top-16 z-50 -translate-x-1/2 rounded-md border px-4 py-2 text-sm shadow-lg ${
+            message.tone === "error"
+              ? "border-danger/40 bg-danger/15 text-danger"
+              : message.tone === "success"
+                ? "border-success/40 bg-success/15 text-success"
+                : "border-line bg-panel text-ink"
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+
       <EditorHeader
         title={project.title}
         saveStatus={saveStatus}
@@ -275,6 +418,17 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             onSplit={splitAtPlayhead}
             onDeleteSelected={() => selectedClipId && deleteClip(selectedClipId)}
             splitDisabled={!canSplit}
+            markInMs={markInMs}
+            markOutMs={markOutMs}
+            hasMarkedRange={hasMarkedRange}
+            onMarkIn={markIn}
+            onMarkOut={markOut}
+            onAdjustMarkIn={setMarkInMs}
+            onAdjustMarkOut={setMarkOutMs}
+            onCutSelection={cutSelection}
+            razorMode={razorMode}
+            onToggleRazorMode={() => setRazorMode((v) => !v)}
+            onRazorClick={handleRazorClick}
           />
         </div>
 
