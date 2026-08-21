@@ -90,6 +90,82 @@ const VOICE_MARKER_STYLES = {
   green: "bg-success",
 } as const;
 
+// Full-duration overview scrubber, independent of the main track's zoom
+// and horizontal scroll — the track above only ever shows a *portion* of
+// a long video at a given zoom level, so jumping to an arbitrary point
+// far outside that portion would otherwise mean scrolling or zooming out
+// first. This always spans the whole clip, click/drag anywhere to seek.
+function ScrubberBar({
+  totalDurationMs,
+  playheadMs,
+  onSeek,
+  voiceMarkers,
+}: {
+  totalDurationMs: number;
+  playheadMs: number;
+  onSeek: (ms: number) => void;
+  voiceMarkers: { startMs: number; endMs: number; tone: "red" | "orange" | "green" }[];
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+
+  function msFromClientX(clientX: number): number {
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect || totalDurationMs === 0) return 0;
+    const ratio = (clientX - rect.left) / rect.width;
+    return Math.max(0, Math.min(totalDurationMs, ratio * totalDurationMs));
+  }
+
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (totalDurationMs === 0) return;
+    dragging.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    onSeek(msFromClientX(e.clientX));
+  }
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragging.current) return;
+    onSeek(msFromClientX(e.clientX));
+  }
+  function handlePointerUp() {
+    dragging.current = false;
+  }
+
+  const playheadPct = totalDurationMs > 0 ? (playheadMs / totalDurationMs) * 100 : 0;
+
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2">
+      <span className="font-mono text-[10px] tabular-nums text-ink-muted">0:00</span>
+      <div
+        ref={barRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        className={`relative h-2.5 flex-1 rounded-full bg-panel ${totalDurationMs === 0 ? "opacity-40" : "cursor-pointer"}`}
+      >
+        <div className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-brand/30" style={{ width: `${playheadPct}%` }} />
+        {totalDurationMs > 0 &&
+          voiceMarkers.map((marker, i) => (
+            <div
+              key={i}
+              title={`${marker.tone === "green" ? "Corrected" : "Possible repetition"}: ${formatTimecode(marker.startMs, true)}`}
+              className={`absolute top-0 h-full w-1 cursor-pointer rounded-full ${VOICE_MARKER_STYLES[marker.tone]}`}
+              style={{ left: `${(marker.startMs / totalDurationMs) * 100}%` }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                onSeek(marker.startMs);
+              }}
+            />
+          ))}
+        <div
+          className="pointer-events-none absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-brand bg-surface shadow"
+          style={{ left: `${playheadPct}%` }}
+        />
+      </div>
+      <span className="font-mono text-[10px] tabular-nums text-ink-muted">{formatTimecode(totalDurationMs)}</span>
+    </div>
+  );
+}
+
 export default function TimelinePanel({
   layout,
   totalDurationMs,
@@ -390,6 +466,8 @@ export default function TimelinePanel({
           </div>
         </div>
       )}
+
+      <ScrubberBar totalDurationMs={totalDurationMs} playheadMs={playheadMs} onSeek={onSeek} voiceMarkers={voiceMarkers} />
     </div>
   );
 }
