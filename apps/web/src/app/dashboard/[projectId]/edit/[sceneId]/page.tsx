@@ -21,12 +21,11 @@ import {
   type TrackType,
   type TransitionType,
 } from "@/lib/composition-api";
-import SaveIndicator from "@/components/save-indicator";
-import { LockIcon, MuteIcon, PlusIcon, RedoIcon, ScissorsIcon, TrackKindIcon, TrashIcon, UndoIcon, UnlockIcon, VolumeIcon } from "@/components/icons";
+import { LockIcon, MuteIcon, PlusIcon, ScissorsIcon, TrackKindIcon, TrashIcon, UnlockIcon, VolumeIcon } from "@/components/icons";
 import MediaLibrary from "./media-library";
 import TimelineItemBlock, { type ItemPatch } from "./timeline-item-block";
-import ExportPanel from "./export-panel";
 import ScenePreview, { type ScenePreviewHandle } from "./scene-preview";
+import EditorMenuBar from "./editor-menu-bar";
 
 const MIN_PX_PER_SECOND = 20;
 const MAX_PX_PER_SECOND = 200;
@@ -325,39 +324,22 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
       : 0;
 
   return (
-    <main className="mx-auto max-w-[1400px] px-6 py-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href={`/dashboard/${projectId}/edit`} className="text-sm text-[var(--tm-text-dim)] underline underline-offset-2">
-            ← Storyboard
-          </Link>
-          <h1 className="mt-1 text-xl font-semibold">{scene.name}</h1>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1">
-            <button
-              onClick={undo}
-              disabled={!canUndo}
-              title="Undo (Ctrl+Z)"
-              className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--tm-line)] text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)] disabled:opacity-30 disabled:hover:border-[var(--tm-line)]"
-            >
-              <UndoIcon />
-            </button>
-            <button
-              onClick={redo}
-              disabled={!canRedo}
-              title="Redo (Ctrl+Shift+Z)"
-              className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--tm-line)] text-[var(--tm-text-dim)] hover:border-[var(--tm-accent)] hover:text-[var(--tm-text)] disabled:opacity-30 disabled:hover:border-[var(--tm-line)]"
-            >
-              <RedoIcon />
-            </button>
-          </div>
-          <SaveIndicator status={saveStatus} error={saveError} />
-        </div>
-      </div>
-
+    <div className="flex min-h-screen flex-col">
+      <EditorMenuBar
+        projectId={projectId}
+        projectTitle={project.title}
+        sceneId={sceneId}
+        sceneName={scene.name}
+        saveStatus={saveStatus}
+        saveError={saveError}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undo}
+        onRedo={redo}
+      />
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-6 py-6">
       {/* Three-pane row: media bin | preview | inspector — the classic NLE layout */}
-      <div className="mt-6 grid grid-cols-[240px_1fr_260px] gap-4">
+      <div className="grid grid-cols-[240px_1fr_260px] gap-4">
         <div className="flex flex-col gap-4">
           <div>
             <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Media</h2>
@@ -396,8 +378,6 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
               </button>
             </div>
           </div>
-
-          <ExportPanel projectId={projectId} sceneId={sceneId} />
         </div>
 
         <div className="min-w-0 flex justify-center">
@@ -698,6 +678,7 @@ export default function TimelinePage({ params }: { params: Promise<{ projectId: 
           </div>
         </div>
       </div>
-    </main>
+      </main>
+    </div>
   );
 }

@@ -65,7 +65,7 @@ export default function ExportPanel({ projectId, sceneId }: ExportPanelProps) {
   }
 
   return (
-    <div className="mt-6 flex flex-col gap-3 rounded-md border border-[var(--tm-line)] bg-[var(--tm-surface)] p-3 text-xs">
+    <div className="flex flex-col gap-3 text-xs">
       <h2 className="font-medium uppercase tracking-wide text-[var(--tm-text-dim)]">Export</h2>
 
       <div className="flex items-center gap-2">

@@ -195,6 +195,32 @@ export function RedoIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5 7.5l5 5 5-5" />
+    </svg>
+  );
+}
+
+export function DownloadIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <path d="M10 3.5v9.5M6.5 9.5L10 13l3.5-3.5" />
+      <path d="M4 15.5h12" />
+    </svg>
+  );
+}
+
+export function ExportIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="3.5" width="13" height="13" rx="1.5" />
+      <path d="M10 6.5v6M7.3 9.3L10 6.5l2.7 2.8" />
+    </svg>
+  );
+}
+
 export function TrackKindIcon({ kind, ...props }: SVGProps<SVGSVGElement> & { kind: "video" | "audio" | "text" }) {
   if (kind === "video") return <VideoKindIcon {...props} />;
   if (kind === "audio") return <AudioKindIcon {...props} />;
