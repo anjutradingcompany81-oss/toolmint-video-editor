@@ -1,26 +1,102 @@
-# ToolMint Video Editor
+# ProCut Video Editor
 
-A browser-based, scene-first video editor: multi-track timeline, non-destructive
-editing, and pluggable AI voice-over. Ships at `toolmint.co.in/video-editor`.
+A simple, browser-based video editor: upload clips, arrange/trim/split them
+on a single timeline, and export one merged MP4. Ships at `toolmint.co.in`
+(the app itself is branded ProCut; the domain/hosting predates the rebrand
+and was deliberately left in place — see "The ProCut rebuild" below).
 
-**Status: Phase 1 (Foundation) complete; Phase 2 (Core MVP Editor) complete.**
-Auth, project CRUD, media upload, and the dashboard are done. The storyboard
-editor, the multi-track timeline (place/move/trim/split/delete clips),
-rendering (export a scene to a real MP4), a real-time canvas preview player
-(play/pause/scrub what's actually on the timeline), text overlays (added,
-styled, and burned into the export via FFmpeg's drawtext), and transitions
-(crossfade/wipe/slide between clips, both previewed and actually rendered
-via xfade/acrossfade) are done. See the product/systems spec for the full
-plan (PRD, architecture, DB schema, timeline JSON format, rendering
-pipeline, cost/risk, phased plan) and Phase 3+ scope.
+**Status: feature-complete for its stated scope.** Upload, drag-reorder,
+trim (drag handles or numeric fields), split-at-playhead, delete, undo/redo,
+autosave with refresh-safe restore, a continuous sequential preview player,
+and export (resolution/quality presets, progress, cancel, download) are all
+built and verified end to end against live Postgres/Redis/MinIO, including
+on the deployed production stack.
+
+## The ProCut rebuild
+
+This app was rebuilt from an earlier, much more ambitious product
+(internally "ToolMint": scenes, multi-track timelines, transitions, text
+overlays, clip speed control) into something deliberately narrower. The
+brief was explicit: upload/arrange/trim/split/merge/export and nothing
+else — no complicated features that distract from those core functions.
+
+**What changed:**
+- Data model: `Scene` → `Track` → `TimelineItem` (nested, multi-track)
+  replaced by a single flat `Clip[]` array (`Timeline`) — array order *is*
+  timeline order.
+- Rendering: the old transition/text-overlay-aware FFmpeg filter-graph
+  builder was replaced with a much simpler concat-based merge pipeline
+  (`apps/api/src/render/merge-ffmpeg.util.ts`) — trim, letterbox to a
+  common frame size, concatenate, encode. No transitions, no text.
+- Frontend: the scene-list + per-scene multi-track timeline editor was
+  replaced with one single-page editor (media panel, preview, timeline,
+  properties panel) rebuilt to the color system in "Design system" below.
+- Removed entirely: scenes, multi-track compositing, transitions
+  (xfade/acrossfade), burned-in text overlays, clip speed control, the
+  canvas-based multi-track preview compositor.
+
+**What was deliberately preserved:** the hosting/deployment pipeline —
+Docker Compose service/volume/network names, the `toolmint.co.in` domain
+and nginx config, the GitHub Actions deploy workflow, the auth/workspace/
+media-upload/project-CRUD infrastructure, and the `ProjectVersion`-based
+composition persistence pattern (still a validated JSON blob per version,
+just a different JSON shape). See "Preserved vs. rebuilt" below for the
+exact file-level breakdown.
+
+### Preserved vs. rebuilt
+
+**Preserved as-is:** `deploy/docker-compose.prod.yml`, `deploy/nginx/*.conf`
+(except the upload-size ceiling, bumped to match the new 1GB limit — see
+below), `.github/workflows/deploy.yml`, both `Dockerfile`s, auth module,
+users module, storage module, the `Project`/`Workspace`/`Membership`/
+`ProjectVersion`/`AuditLog` Prisma models, the composition
+save/autosave/versioning pattern and its route (`/projects/:id/composition`
+— same path, new payload shape internally called `Timeline` instead of the
+old `Composition`).
+
+**Rebuilt:** `apps/api/src/projects/composition.schema.ts` (flat
+`Clip[]`), `apps/api/src/render/*` (new merge pipeline, cancel support,
+quality presets), `MediaAsset.hasAudio` (new field, needed for the merge
+pipeline's silent-audio fallback), `ExportJob` (dropped `sceneId`, added
+`quality`/`outputFileName`/`cancelRequested`), the entire
+`apps/web/src/app/dashboard/[projectId]/edit/**` tree, `globals.css`
+(new color tokens), the dashboard's New Project flow (no more aspect-ratio
+picker — canvas shape is now derived from the first clip at export time).
+
+**Removed (dead code, no longer reachable from any route):**
+`apps/api/src/render/ffmpeg-command.util.ts` (+its spec), the old
+`apps/web/src/app/dashboard/[projectId]/edit/[sceneId]/**` route (scene
+timeline editor), `apps/web/src/app/dashboard/[projectId]/page.tsx` +
+`media-upload.tsx`/`media-item.tsx` (a separate project-detail/upload page,
+superseded by the new editor's own media panel), unused icon exports, and
+the `dejavu-fonts-ttf` npm dependency (only used by the deleted text-overlay
+renderer).
 
 ## Stack
 
-- **apps/web** — Next.js (App Router) + TypeScript + Tailwind CSS
+- **apps/web** — Next.js (App Router) + TypeScript + Tailwind CSS v4
 - **apps/api** — NestJS + TypeScript + Prisma (PostgreSQL)
 - **Infra** — PostgreSQL, Redis (BullMQ render queue), S3-compatible object
   storage (MinIO locally; swap for AWS S3 / R2 / B2 in production via env
-  vars only), FFmpeg (bundled static binary — no system install needed)
+  vars only), FFmpeg (bundled static binary via `ffmpeg-static`/
+  `ffprobe-static` — no system install needed, in dev or in the Docker image)
+
+## Design system
+
+Exact palette (`apps/web/src/app/globals.css`, exposed as Tailwind v4
+`@theme` tokens — `bg-surface`, `text-ink`, `bg-brand`, etc.):
+
+| Token | Hex | Use |
+|---|---|---|
+| `surface` | `#090D16` | Main app background |
+| `surface-2` | `#101827` | Header, sidebars |
+| `panel` | `#162033` | Cards, panels, modals |
+| `line` | `#283449` | Borders, dividers |
+| `brand` | `#2563EB` | Primary actions, selected clips, active controls |
+| `danger` | `#EF4444` | Destructive actions, errors |
+| `success` | `#22C55E` | Successful uploads/exports |
+| `ink` | `#F8FAFC` | Primary text |
+| `ink-muted` | `#94A3B8` | Secondary text |
 
 ## Prerequisites
 
@@ -28,7 +104,7 @@ pipeline, cost/risk, phased plan) and Phase 3+ scope.
 - Docker Desktop (for Postgres / Redis / MinIO) — or WSL2 with Postgres/
   Redis/MinIO installed natively, see "Running infra without Docker" below
 
-## Quick start
+## Quick start (development)
 
 ```bash
 npm install
@@ -71,33 +147,51 @@ process running whenever the API is running.** WSL2's lightweight VM shuts
 itself down a few seconds after the last attached process exits, and the
 *next* `wsl` invocation silently reboots it from scratch — which restarts
 every systemd service inside, including Postgres/Redis/MinIO, killing
-whatever had a connection open. This looked exactly like flaky networking
-(intermittent `ECONNREFUSED` / `P1001 Can't reach database server`) and
-cost a lot of time to diagnose as VM churn instead. The fix is to hold the
-VM open for the whole dev session:
+whatever had a connection open. The fix is to hold the VM open for the
+whole dev session:
 
 ```bash
 # run once, in the background, before starting the API
 wsl -d Ubuntu -- sleep infinity &
 ```
 
-With that running, the WSL VM (and everything in it) stays up indefinitely
-and the API's Postgres/Redis connections stay alive normally — no
-special retry logic needed. Without it, expect the API to work for the
-first request or two after each `wsl` command and then start throwing
-connection errors as the VM tears itself down again.
+## FFmpeg
+
+No system-level FFmpeg install is required, in dev or in production —
+`ffmpeg-static` and `ffprobe-static` (both listed in
+`apps/api/package.json`) ship real platform binaries as part of `npm
+install`, and both the local dev server and the production Docker image
+use those bundled binaries. Verified live in production immediately after
+deploy: upload → probe (duration/resolution/audio-track detection) →
+merge/export all confirmed working against the actual deployed container.
+
+## Production build & deploy
+
+```bash
+npm run build --workspace apps/api   # nest build
+npm run build --workspace apps/web   # next build
+```
+
+Deployment is CI/CD via GitHub Actions (`.github/workflows/deploy.yml`):
+every push to `main` SSHes into the VPS, runs `git pull`, rebuilds the
+Docker Compose stack (`docker compose -f deploy/docker-compose.prod.yml
+--env-file deploy/.env.prod up -d --build`), and runs `prisma migrate
+deploy` inside the API container. Full step-by-step runbook:
+**[`deploy/README.md`](deploy/README.md)**.
+
+One manual step outside that automated flow: `deploy/nginx/toolmint.conf`
+lives on the VPS's own nginx install, not inside a container, so a change
+to it (e.g. the upload-size ceiling bumped in this rebuild) doesn't take
+effect from `git pull` alone — copy it to `/etc/nginx/sites-available/`
+and `sudo nginx -t && sudo systemctl reload nginx` on the VPS.
 
 ## Project structure
 
 ```
 apps/
-  web/    Next.js frontend — public site + editor UI (Phase 2+)
-  api/    NestJS backend — REST/GraphQL API, Prisma schema, business logic
+  web/    Next.js frontend — dashboard + the ProCut editor
+  api/    NestJS backend — REST API, Prisma schema, FFmpeg render pipeline
 ```
-
-Additional apps (render workers, AI workers) are split out from `apps/api` once
-Phase 2/3 makes rendering and AI generation heavy enough to need independent
-scaling — see the architecture doc.
 
 ## Scripts (run from repo root)
 
@@ -107,384 +201,190 @@ scaling — see the architecture doc.
 | `npm run build` | Build both apps |
 | `npm run lint` | Lint both apps |
 | `npm run typecheck` | Type-check both apps |
-| `npm run test` | Run tests (API only, for now) |
+| `npm run test` | Run tests (API only — 84 tests across 8 suites) |
 | `npm run prisma:generate` | Regenerate the Prisma client after a schema change |
 | `npm run prisma:migrate` | Create/apply a migration in dev |
 
-> **Note:** on this machine (Windows, project under a OneDrive-synced path),
-> Jest's file crawler has intermittently under-reported `apps/api/src` —
-> `jest --listTests` silently returning only a handful of files (always the
-> ones most recently written) instead of every `*.spec.ts` file, with no
-> error. Ruled out: stale cache (`--clearCache` and a fresh
-> `--cacheDirectory` didn't help), Watchman (not installed), file or
-> directory mtime (touching either didn't help), and the Jest major version
-> (pinning `jest`/`ts-jest`/`@types/jest` to `^29` instead of `latest`
-> didn't help either). The only fix found was re-writing each missing
-> spec file's content. Root cause unconfirmed — if `npm test` ever reports
-> suspiciously few suites, run `jest --listTests` before trusting a clean
-> result, and re-save any spec file that's missing.
-
 ## Database
 
-The schema (`apps/api/prisma/schema.prisma`) currently covers what Phase 1
-needs: `User`, `Workspace`, `Membership`, `Project`, `ProjectVersion`,
-`MediaAsset`, `AuditLog`, plus auth-support tables (refresh tokens, password
-reset, email verification). `Scene` / `Track` / `TimelineItem` / `VoiceOver` /
-`ExportJob` / etc. are added when the editor and AI modules that own them are
-built, not before — see the DB schema section of the spec for the full model.
+`apps/api/prisma/schema.prisma`: `User`, `Workspace`, `Membership`,
+`Project`, `ProjectVersion`, `MediaAsset`, `ExportJob`, `AuditLog`, plus
+auth-support tables (refresh tokens, password reset, email verification).
 
-The timeline itself is never stored as separate rows per clip — it's a single
-validated JSON document on `ProjectVersion.composition`, checked against the
-Zod schema in `apps/api/src/projects/composition.schema.ts`. See the spec's
-"Timeline JSON specification" for the format.
+The timeline is never stored as separate rows per clip — it's a single
+Zod-validated JSON document on `ProjectVersion.composition`
+(`apps/api/src/projects/composition.schema.ts`): `{ schemaVersion, clips:
+[{ id, mediaAssetId, trimInMs, trimOutMs, volume, muted }], updatedAt }`.
+Array order is timeline order; no separate ordering/position field to keep
+in sync.
+
+## Environment variables
+
+See `apps/api/.env.example` and `apps/web/.env.example` for the full list
+with comments. Never commit `.env` or `.env.local` — both are gitignored.
+
+Key ones:
+
+| Variable | Where | What |
+|---|---|---|
+| `DATABASE_URL` | api | Postgres connection string |
+| `REDIS_URL` | api | Redis connection string (BullMQ render queue) |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | api | S3-compatible object storage (MinIO locally) |
+| `JWT_ACCESS_SECRET` | api | Signs access tokens |
+| `WEB_APP_URL` | api | CORS origin + link base for auth emails |
+| `NEXT_PUBLIC_API_URL` | web | API base URL the browser calls |
 
 ## Auth
 
 Email/password auth, backed by short-lived JWT access tokens and rotating
-opaque refresh tokens:
+opaque refresh tokens; guest login also available (private, per-session
+accounts, no sign-up).
 
 | Endpoint | What it does |
 |---|---|
 | `POST /auth/register` | Create a user + a default personal workspace, log in immediately |
 | `POST /auth/login` | Exchange email/password for tokens |
+| `POST /auth/guest` | Create a private guest account, log in immediately |
 | `POST /auth/refresh` | Rotate the refresh token (cookie-based), issue a new access token |
 | `POST /auth/logout` | Revoke the current refresh token |
-| `GET /auth/me` | Current user (requires `Authorization: Bearer <accessToken>`) |
-| `POST /auth/verify-email` | Consume a verification token |
-| `POST /auth/resend-verification` | Re-send the verification email (requires auth) |
-| `POST /auth/forgot-password` | Request a reset link (always 200 — never reveals whether the email exists) |
-| `POST /auth/reset-password` | Consume a reset token, set a new password, revoke all sessions |
-
-Notes:
-- The access token comes back in the JSON body; the refresh token is set as an
-  `httpOnly` cookie scoped to `/auth`, never exposed to client JS.
-- Refresh tokens rotate on every use. Replaying an already-rotated token is
-  treated as theft and revokes every active session for that user.
-- Registration issues tokens immediately — email verification is required
-  before certain future actions (not yet gated on anything), not before login.
-- Verification/reset emails go through a `MailService` adapter; the dev
-  implementation logs the message (with the link) to the API console instead
-  of sending real email. Swap in a real provider by implementing `MailService`
-  and changing the provider in `apps/api/src/mail/mail.module.ts`.
-- `register`, `login`, `forgot-password`, and `resend-verification` are rate
-  limited per IP (in-memory — fine for one API instance; move to a
-  Redis-backed limiter before running more than one).
+| `GET /auth/me` | Current user |
+| `POST /auth/verify-email` / `resend-verification` | Email verification |
+| `POST /auth/forgot-password` / `reset-password` | Password reset |
 
 ## Projects & media
 
-All endpoints below require `Authorization: Bearer <accessToken>`.
-
 | Endpoint | What it does |
 |---|---|
-| `POST /projects` | Create a project (+ its initial empty composition) in the caller's workspace |
-| `GET /projects?includeArchived=&search=` | List the caller's projects, newest-updated first |
-| `GET /projects/:id` | Get one project (404, not 403, if the caller isn't a member) |
-| `PATCH /projects/:id` | Rename and/or archive/unarchive |
-| `POST /projects/:id/duplicate` | Clone a project, including its latest composition |
-| `DELETE /projects/:id` | Delete a project and its media objects |
-| `POST /projects/:id/media` | Upload a file (`multipart/form-data`, field `file`) |
-| `GET /projects/:id/media` | List a project's media, each with a 10-minute signed preview URL |
+| `POST /projects` | Create a project (`{ title, fps? }` — no aspect-ratio picker; canvas shape is derived from the first clip at export time) |
+| `GET /projects?includeArchived=&search=` | List the caller's projects |
+| `GET /projects/:id` / `PATCH` / `DELETE` / `POST /:id/duplicate` | Standard CRUD |
+| `POST /projects/:id/media` | Upload a video (`multipart/form-data`, field `file`) |
+| `GET /projects/:id/media` | List a project's media, each with a signed preview URL |
 | `DELETE /projects/:id/media/:mediaAssetId` | Delete one media asset |
 
 Notes:
-- Workspace roles gate write access: `VIEWER`/`REVIEWER` can read but not
-  rename, archive, delete, or upload; `OWNER`/`EDITOR` can do both. Every user
-  is `OWNER` of their own workspace today — role differences matter once team
-  workspaces (Phase 4) exist.
-- Uploads are proxied through the API (multipart in, `PutObject` out) rather
-  than a direct browser-to-bucket presigned PUT. That's simpler and sidesteps
-  bucket CORS entirely, at the cost of routing file bytes through the Node
-  process — fine at MVP scale, worth revisiting (direct presigned uploads,
-  chunked/resumable) before large files or high volume matter.
-- Per-kind mime-type allowlist and size caps live in
-  `apps/api/src/media/media.constants.ts` (video 500MB, image 25MB, audio
-  100MB, PDF 20MB) — placeholders until plan-based limits exist.
-- No malware scanning yet (Phase 4/5 concern per the spec) — only type/size
-  validation today.
+- Video only (MP4/MOV/WebM/AVI/MKV), 1GB per file
+  (`apps/api/src/media/media.constants.ts`). Duplicate uploads are
+  rejected by SHA-256 checksum.
+- Each upload is probed with ffprobe for duration, resolution, and whether
+  it has an audio track (`MediaAsset.hasAudio`) — the merge pipeline
+  generates a silent audio segment for sources with none, rather than
+  erroring or desyncing the timeline.
+- Filenames are sanitized before ever touching a storage key or shell
+  command — no path traversal, no injection.
 
 ## Composition & editor
 
 | Endpoint | What it does |
 |---|---|
-| `GET /projects/:id/composition` | The latest saved composition (scenes, tracks, etc.) |
-| `POST /projects/:id/composition` | Validate and save — creates a **new** `ProjectVersion` row, doesn't mutate one in place |
+| `GET /projects/:id/composition` | The latest saved timeline |
+| `POST /projects/:id/composition` | Validate and save — creates a new `ProjectVersion` row |
 
-Autosave creates a new version per save rather than updating one in place.
-That matches the spec (composition JSON lives on an immutable
-`ProjectVersion` snapshot) and makes "restore an earlier version" (Phase 4)
-a read over rows that already exist instead of a schema change later. At
-MVP save frequency (debounced ~1.5s after the last edit) this is a
-reasonable number of rows; if that changes, a scheduled job to prune/squash
-old autosave versions is the fix — not switching to in-place mutation.
+`/dashboard/[projectId]/edit` is the whole editor: a media panel (upload,
+thumbnails, add-to-timeline) on the left, a preview player in the center
+(continuous playback across clip boundaries, play/pause, frame-step,
+scrub, per-clip volume/mute, fullscreen), a single timeline along the
+bottom (drag to reorder, drag the clip edges to trim, split at the
+playhead, delete, zoom, magnetic snapping to clip boundaries and the
+playhead), and a properties panel on the right (numeric trim, volume,
+mute, reset, delete). Autosave debounces ~1.5s after the last edit; a
+refresh restores the last-saved state (verified live — mid-edit reload
+returns the exact same clip list).
 
-`/dashboard/[projectId]/edit` is the storyboard editor: add/rename/reorder
-(move up/down)/delete scenes, per-scene duration.
-
-`/dashboard/[projectId]/edit/[sceneId]` is the timeline editor for one
-scene: add video/audio tracks (lock/mute/remove), select a media asset and
-click a track to append it there, select a placed clip to edit its start/
-duration as precise numbers, split it at the playhead (click the ruler to
-move the playhead), and delete (confirmed — no undo system yet). A track
-only accepts compatible media (video tracks take video/image, audio tracks
-take audio), enforced both as a disabled/labeled affordance in the UI and
-by the Zod schema server-side.
-
-Both editors debounce saves and show status (`Unsaved changes` → `Saving…`
-→ `Saved`, or an error), sharing one hook (`use-composition-editor.ts`) so
-neither duplicates the load/autosave logic.
-
-**Why click-to-place instead of drag-and-drop, and number fields instead of
-drag-to-trim:** this codebase already prefers explicit controls over drag
-gestures (scene reordering uses move-up/down buttons, not drag) — for the
-same reason it does here: precise, keyboard/screen-reader friendly, and
-reliably testable, versus a native HTML5 drag-and-drop or freeform
-pointer-drag interaction that's fragile to automate and awkward on touch.
-Real drag-and-drop placement and drag-to-trim handles are UX polish that
-can be layered on top of the same data model later without a rework.
-
-**What's deliberately out of scope for this pass:** transitions (`clip`/
-`audio`/`text` item types exist — see "Text overlays" below — but nothing
-for cross-fades or wipes between clips yet), and real source duration —
-`MediaAsset.durationMs` is never populated (no ffprobe integration yet),
-so new clips get a placeholder duration (3s for images, 5s for video/audio)
-with no validation that trims stay within the actual source length. That
-validation arrives with the render pipeline.
-
-Verified end to end against live Postgres, including the actual JSON
-payload after each operation: added/reordered/renamed/resized scenes;
-placed two video clips and one that a locked/wrong-kind track correctly
-refused; split a clip at the playhead and confirmed the two halves'
-`trimInMs`/`trimOutMs` are exactly complementary; moved a clip via its
-start-time field; deleted a clip (and confirmed the confirm-guard actually
-blocks an unconfirmed delete); reloaded the page after every step and got
-back the exact same state each time.
-
-## Preview player
-
-`scene-preview.tsx` renders what's actually on the timeline — a `<canvas>`
-above the track list with Play/Pause and a time readout, sharing the same
-`playheadMs` state as the ruler (so scrubbing the ruler moves the preview
-and vice versa). It mirrors the renderer's own scope: the first video track
-with clips (image or video) plus the first audio track with clips, same as
-what `POST /exports` will actually render — what you preview is what you
-get.
-
-Video/image/audio elements are created lazily (one per `MediaAsset`, kept
-off-DOM, `drawImage`'d onto the canvas each frame) rather than one element
-per timeline item, so scrubbing back onto a clip reuses its already-loaded
-element instead of re-fetching. Playback drives the active element's
-native `play()` (so decoding/audio timing stays smooth) and only reseeks
-on clip changes or when drift exceeds 300ms, rather than reseeking every
-animation frame — reseeking every frame is the naive approach and it
-stutters badly on compressed video. Paused scrubbing seeks directly and
-redraws once the browser fires `seeked`/`loadeddata` — necessary because
-the very first `drawImage` after creating an element usually fires before
-it has a decoded frame at all, drawing nothing.
-
-`Transform` (x/y/scale/rotation/opacity, already in the schema, previously
-unused) is applied on the canvas the same way it will need to be applied
-in the render pipeline eventually: fit-contain into the frame, then the
-clip's own scale/offset/rotation/opacity on top.
-
-**Known limitation:** video/image elements are loaded from MinIO's signed
-URLs, a different origin than the web app, and MinIO doesn't send CORS
-headers — so the canvas is "tainted" after the first `drawImage`
-(`getImageData`/`toDataURL` throw `SecurityError`). Display-only playback
-is unaffected; anything that needs pixel readback (e.g. generating a
-thumbnail from the canvas) will need CORS headers added to the MinIO
-bucket policy first.
-
-Verified live: uploaded a real synthetic clip, placed it on a video track,
-confirmed the canvas actually painted its color (not just a black frame —
-caught and fixed a real bug this way, see the "Known limitation" note's
-sibling fix above about `seeked`/`loadeddata`), pressed Play and watched
-the readout and the ruler's playhead advance in lockstep, confirmed
-playback auto-stops at exactly the scene's end, and confirmed clicking the
-ruler while paused scrubs the canvas to the correct frame.
-
-## Text overlays
-
-A `text` track type holds `text`-type timeline items — no `MediaAsset`
-behind them; content/font size/color live directly on the item
-(`composition.schema.ts`'s `timelineItemSchema` is a Zod discriminated
-union on `type` now: `clip`/`audio` items are still backed by a
-`mediaAssetId`, `text` items aren't). Add a text track from the timeline
-editor's Tracks panel, then click its lane to append a default item —
-selecting it shows Text/Font size/Color fields alongside the usual Start/
-Duration. Unlike video/audio tracks, a scene can have any number of text
-tracks and their items never need to be contiguous or non-overlapping —
-overlapping captions/titles are meant to stack.
-
-**Rendered for real, not just a UI mockup:** the render pipeline chains a
-`drawtext` filter per active text item onto the video output
-(`ffmpeg-command.util.ts`), gated by `enable='between(t,start,end)'` so
-each one is only visible during its own time range. Two choices worth
-calling out:
-- **Font:** bundled via the `dejavu-fonts-ttf` npm package (dependency-
-  free, ships real `.ttf` files) rather than relying on whatever fonts
-  happen to be on the host — matters most on a bare Linux prod server,
-  which usually has none.
-- **Text content goes through a file (`textfile=`), not inlined into the
-  filter string.** FFmpeg drawtext's inline-text escaping rules (colons,
-  quotes, percent signs each need different treatment) are fragile enough
-  that a temp `.txt` file per overlay was the more correct choice — only
-  the file *path* needs escaping (Windows drive-letter colons,
-  backslashes), not arbitrary user-typed content.
-
-**Known limitation, deliberate:** rotation isn't editable for text, in
-either the preview or the export. FFmpeg's `drawtext` filter has no
-rotation option — supporting it in the editor would mean preview and
-export could visibly disagree, which is worse than not having it.
-
-Verified live end to end: added a text track and item through the actual
-UI, edited content/font size/color, confirmed the saved composition
-matches server-side, confirmed the canvas preview paints the text in the
-right color/content, exported the scene, downloaded the real output MP4,
-and extracted a frame with `ffmpeg` — the text is genuinely burned into
-the video, not just visible in the editor.
+Keyboard shortcuts: Space (play/pause), S (split), Delete/Backspace
+(remove selected), Ctrl/Cmd+Z (undo), Ctrl/Cmd+Shift+Z (redo), ←/→ (step
+one frame), Ctrl/Cmd +/− (zoom). A shortcut only fires when focus isn't in
+a genuine text-entry control — a range slider or checkbox holding focus
+(e.g. right after dragging the volume slider) doesn't block Space/S/etc.
 
 ## Rendering & export
 
 | Endpoint | What it does |
 |---|---|
-| `POST /projects/:id/exports` | Start a render — body `{ sceneId, resolution: "R720P" \| "R1080P" }` |
-| `GET /projects/:id/exports` | List a project's export jobs, newest first |
+| `POST /projects/:id/exports` | Start a render — `{ resolution: "R720P" \| "R1080P" \| "ORIGINAL", quality?: "STANDARD" \| "HIGH" \| "MAXIMUM", outputFileName? }` |
+| `GET /projects/:id/exports` | List a project's export jobs |
 | `GET /projects/:id/exports/:jobId` | Poll one job; includes a signed download URL once `COMPLETED` |
+| `POST /projects/:id/exports/:jobId/cancel` | Request cancellation of a queued/running export |
 
-Architecture: `POST` creates an `ExportJob` row (`QUEUED`) and enqueues it on
-a BullMQ queue backed by Redis. An in-process worker (`RenderProcessor`,
-started alongside the API — a separate worker process is a scaling
-concern for later, not a correctness one now) picks it up, downloads the
-needed source files from object storage to a temp directory, builds an
-FFmpeg `filter_complex` graph, runs a real FFmpeg process (via
-`ffmpeg-static` — a bundled binary, no system install required; see the
-note in "Transitions" below on why this isn't `@ffmpeg-installer/ffmpeg`
-anymore), uploads the result back to object storage, and updates the job
-to `COMPLETED` with a storage key (or `FAILED` with a message). Progress
-is coarse-grained (stage-based: 5/15/40/90/100), not frame-accurate.
+Architecture: `POST` creates an `ExportJob` row and enqueues it on a
+BullMQ queue backed by Redis; only one export can be active per project at
+a time (a second request is rejected, not silently queued behind the
+first, so the UI never looks like it's doing nothing). An in-process
+worker (`RenderProcessor`) downloads each clip's source from object
+storage, builds a single FFmpeg `filter_complex` graph
+(`merge-ffmpeg.util.ts`) that trims each clip to its playable span, scales
+and pads every clip to the first clip's own aspect ratio (letterboxed, not
+stretched), and concatenates with a single interleaved
+`concat=n=N:v=1:a=1` filter — no transitions, no per-clip effects, matching
+the "hard cuts only" scope. Quality presets map to CRF/audio-bitrate pairs
+(`STANDARD`: crf 23/128k, `HIGH`: crf 20/192k, `MAXIMUM`: crf 16/256k).
+Cancellation is real, not cosmetic: the worker polls the job's
+`cancelRequested` flag once a second while ffmpeg runs and sends `SIGTERM`
+if it's set — verified live with a 25-second 1080p source, cancelling
+mid-render and confirming the job actually stopped (status flips to
+`CANCELLED`) rather than running to completion regardless.
 
-**Scope for this pass:** renders one scene at a time (not a whole
-multi-scene project), from exactly one video track plus at most one audio
-track — plus *every* text track's items (text is meant to layer over the
-video, so unlike clips it isn't limited to one track and doesn't need to
-be contiguous; see "Text overlays" above). Multiple video/audio tracks
-(which would need real layering/compositing, not built yet) are ignored
-beyond the first of each. Clips on the rendered video/audio track must be
-back-to-back with **no gaps** — the render is rejected up front with a
-specific, actionable message (`ffmpeg-command.util.ts`'s
-`checkContiguous`) rather than silently producing wrong output; a bounded
-*overlap*, however, is no longer an error — see "Transitions" below.
-Output resolution is derived from the project's aspect ratio and the
-chosen 720p/1080p tier (`computeDimensions`); images are looped to their
-placed duration, videos are trimmed per clip, and everything is
-scaled/padded to a common frame size before concatenation so mixed source
-resolutions don't break the concat filter.
+**Verified end to end, twice** — once against local dev infra, once
+against the actual deployed production stack immediately after this
+rebuild went live: upload two real clips (one with audio, one without,
+different resolutions) → trim one → split another into two independently
+editable segments → export → `ffprobe` the downloaded output. Confirmed:
+correct total duration (sum of trimmed/split segments, exactly), correct
+canvas dimensions with letterboxing for the mismatched-resolution clip,
+continuous AAC audio across the whole output including through the
+segment that had no source audio (synthetic silent track), and a
+standards-compliant H.264/AAC/yuv420p MP4 with `faststart` that plays in
+any common player.
 
-Code, unit tests (dimension math, contiguity validation, filter-graph,
-text-overlay drawtext-chain, and transition xfade/acrossfade-chain
-construction, Windows path escaping — 25 tests), typecheck, lint, and
-build are all verified.
-Verified end to end twice against live Postgres/Redis/MinIO: once via raw
-API calls (register, create a project, upload two real FFmpeg-generated
-clips, place them back-to-back on a track, export, poll to `COMPLETED`,
-download, `ffprobe` the output) and once by driving the actual browser UI
-(register, upload through the drop zone, add a track, place a clip, click
-"Export scene", watch the panel go `Queued` → `Ready` with a working
-download link). Both produced a genuine playable H.264 MP4 at the
-requested resolution and duration. The failure path was verified for
-free along the way: an export attempted against a since-changed
-composition correctly failed with `This scene has no video clips to
-render` instead of producing wrong output. See "Running infra without
-Docker" below for what made this fiddly on this machine.
+## Known limitations
 
-## Transitions
+- **No chunked/resumable upload.** Uploads are a single multipart POST,
+  proxied through the API (not a direct browser→bucket presigned PUT).
+  Fine up to the 1GB ceiling on a stable connection; a dropped connection
+  mid-upload has to restart from zero. Chunked/resumable upload (tus
+  protocol, or S3 multipart) would be the next step if large files on
+  unreliable connections becomes a real requirement.
+- **No malware/content scanning** on uploads — type/size/duplicate
+  validation only.
+- **Progress during render is coarse-grained**, not frame-accurate: it's
+  driven by parsing ffmpeg's own `time=` stderr lines against the known
+  total duration, updated at most twice a second — smooth enough for a
+  progress bar, not a precise ETA.
+- **Thumbnails aren't auto-generated** for exported videos or for
+  individual media assets beyond the browser's own first-frame video
+  poster — `Project.thumbnailKey` exists in the schema (fed by a captured
+  preview frame elsewhere in the app) but nothing auto-populates it from
+  an uploaded clip yet.
+- **Mobile is functional but not optimized.** The editor lays out with
+  fixed-width side panels sized for desktop; it works down to a tablet
+  viewport but doesn't yet collapse into the "recommend desktop for
+  advanced editing" mobile-specific flow the original spec called for.
 
-No new field stores a transition's *duration* — it's simply however far a
-clip's `startMs` overlaps the previous clip's end on the same track.
-`checkContiguous` (`ffmpeg-command.util.ts`) used to reject any overlap;
-now it only rejects a *gap*, or an overlap long enough to consume one of
-the two clips entirely (nothing left to actually show). The only new
-field is `transitionIn` on clip/audio items — a style (`fade`/`wipeleft`/
-`wiperight`/`slideup`), meaningless until an overlap exists. To create a
-transition in the timeline editor: place two clips back-to-back, then
-drag/type the second one's Start (s) earlier so it overlaps the first,
-and pick a style from the "Transition in" dropdown that appears on
-selection.
+## Testing
 
-**Rendered for real:** when a track has an overlap, the renderer chains
-`xfade` (video) / `acrossfade` (audio) instead of `concat`, computing each
-transition's `offset` from the running cumulative duration of the
-merged-so-far stream (each transition shrinks that running total by its
-own length — not just the sum of raw clip durations). No transition on a
-track falls back to the exact same `concat` path as before, so untouched
-projects render identically to pre-transition behavior.
+Backend: 84 tests across 8 suites (`npm run test --workspace apps/api`),
+covering the merge/trim/split FFmpeg command builder in isolation (no real
+ffmpeg process — pure function tests on the generated argument list), plus
+service-level tests for auth, projects, media (including duplicate-upload
+rejection and the video-only file-type restriction), composition
+validation, and the export service (including the single-active-export
+guard and cancel flow).
 
-**A real blocker hit and fixed along the way:** `xfade` requires FFmpeg
-4.3+, but `@ffmpeg-installer/ffmpeg` (used since the render module was
-first built) turned out to be a frozen 2018 build with no newer version
-ever published — there was no "wait for an update" path. Rather than
-hand-roll a crossfade from 2018-era filters (`overlay`+`fade`+`tpad`
-timeline-shifting — doable, but fragile and a lot more filter-graph
-surface area to get subtly wrong), the render pipeline now runs on
-`ffmpeg-static` instead (FFmpeg 6.1, confirmed via `-filters` to actually
-have `xfade`/`acrossfade`), which changes nothing about the "bundled
-binary, no system install" property — it's a different package, not a
-system dependency.
-
-**Preview parity, and where it deliberately falls short:** the canvas
-preview blends two active clips during their overlap window — the
-incoming clip is drawn over the outgoing one with `globalAlpha` rising
-from 0 to 1, which is mathematically the same result as a linear
-crossfade for opaque video frames. Audio gets a real crossfade too
-(`HTMLAudioElement.volume` on both elements, no Web Audio API needed).
-**Known limitation:** only the `fade` style is actually blended in
-preview — `wipeleft`/`wiperight`/`slideup` are approximated as a hard cut
-at the overlap's midpoint, since reproducing FFmpeg's exact wipe/slide
-geometry in canvas wasn't worth the complexity for a preview (the export
-always renders the real style regardless).
-
-Verified live end to end: two real FFmpeg-generated clips (solid blue,
-solid green) placed with a 1s overlap and `transitionIn: "fade"`,
-confirmed the schema accepted the overlap (previously would have been
-rejected), exported the scene, downloaded the real output, and extracted
-frames across the transition window with `ffmpeg` — pure blue before the
-overlap, a genuine blue-green blend at the midpoint, pure green after,
-confirming an actual gradient rather than a hard cut. The same blend was
-also confirmed live in the browser preview by scrubbing into the overlap.
-
-## Frontend
-
-`apps/web/src/lib` holds the client-side data layer:
-
-- `api-client.ts` — `apiFetch()` wraps every API call: attaches the in-memory
-  access token, and on a 401 transparently refreshes and retries once.
-  `refreshSession()` is the single entry point for calling `/auth/refresh` —
-  concurrent callers (a 401 retry racing the initial mount-time session
-  restore, or React invoking an effect twice) dedupe onto one in-flight
-  request. This isn't optional: refresh tokens rotate on every use, and the
-  API treats a replayed token as theft by revoking every session for that
-  user — two concurrent, undeduped refresh calls from the same starting
-  cookie will lock the user out. (Found and fixed via live browser testing,
-  not something the unit tests catch.)
-- `auth-context.tsx` — `AuthProvider`/`useAuth()`. Access token lives in
-  memory only (not localStorage); a page load has none, so it restores the
-  session via the refresh cookie on mount.
-- `use-require-auth.ts` — redirects to `/login` when unauthenticated; used by
-  every page under `/dashboard`.
-- `projects-api.ts` — typed wrappers for the Projects/Media endpoints.
-
-Pages: `/login`, `/register`, `/forgot-password`, `/reset-password`,
-`/verify-email`, `/dashboard` (list/create/rename/archive/duplicate/delete),
-`/dashboard/[projectId]` (drag-and-drop or click-to-browse upload, media
-grid with type-appropriate previews). No tests yet for `apps/web` — verified
-by live browser walkthrough (register → create → rename → duplicate →
-archive/filter → upload → delete-confirmation → logout) against the real API,
-Postgres, and MinIO.
-
-## Environment variables
-
-See `apps/api/.env.example` and `apps/web/.env.example`. Never commit `.env` or
-`.env.local` — both are gitignored.
+No automated frontend test suite yet — verified instead by driving the
+actual browser against real infra (both local dev and, after deploy, the
+live production stack): registration/login/guest-login, project creation,
+upload, add-to-timeline, playback across clip boundaries, trim (drag
+handles and numeric fields), split, drag-to-reorder, delete, undo/redo,
+every keyboard shortcut (via real trusted key events, not synthetic
+`dispatchEvent` — browser autoplay policy blocks `.play()` from untrusted
+synthetic events, which surfaced as a useful reminder while verifying
+Space-to-play), export with live progress, cancel-mid-render, and a
+refresh-mid-edit restore. Two real bugs were found and fixed this way: an
+export-cancel request that updated the database flag but never actually
+signaled the running ffmpeg process, and a keyboard-shortcut guard that
+was too broad (blocking Space/S/Delete/etc. whenever *any* `<input>` —
+including the playhead scrubber and volume slider — held focus, not just
+genuine text-entry fields).
 
 ## Deploying to production
 
@@ -493,10 +393,7 @@ anything else already on that machine (own network, own volumes, own
 containers — see `deploy/docker-compose.prod.yml`'s header comment) with
 nginx as the single public entry point for `www.toolmint.co.in` (web),
 `api.toolmint.co.in` (API + its in-process BullMQ render worker), and
-`media.toolmint.co.in` (S3-compatible storage, self-hosted via MinIO —
-avoids needing a separate storage-provider account, though `StorageService`
-would work unchanged against AWS S3 / R2 / B2 too, since it only ever talks
-to whatever's behind `S3_ENDPOINT`).
+`media.toolmint.co.in` (S3-compatible storage, self-hosted via MinIO).
 
 Full step-by-step runbook: **[`deploy/README.md`](deploy/README.md)**.
 
