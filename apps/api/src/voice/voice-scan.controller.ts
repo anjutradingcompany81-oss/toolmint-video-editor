@@ -31,6 +31,11 @@ export class VoiceScanController {
     return this.voiceScans.results(user.id, projectId, jobId);
   }
 
+  @Get(":jobId/transcript")
+  transcript(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Param("jobId") jobId: string) {
+    return this.voiceScans.transcript(user.id, projectId, jobId);
+  }
+
   @Post(":jobId/cancel")
   cancel(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Param("jobId") jobId: string) {
     return this.voiceScans.cancel(user.id, projectId, jobId);

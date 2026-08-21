@@ -10,6 +10,7 @@ import {
   getBatchPreview,
   getVoiceScan,
   getVoiceScanResults,
+  getVoiceScanTranscript,
   markVoiceScanResult,
   pauseVoiceScan,
   resumeVoiceScan,
@@ -21,6 +22,7 @@ import {
   type CustomThresholds,
   type RepetitionResult,
   type SensitivityPreset,
+  type TranscriptLine,
   type VoiceScanJob,
 } from "@/lib/voice-scan-api";
 import { ApiError } from "@/lib/api-client";
@@ -85,10 +87,15 @@ export default function VoiceCorrectionPanel({
   const [error, setError] = useState<string | null>(null);
   const [batchPreview, setBatchPreview] = useState<BatchPreview | null>(null);
   const [batchApplying, setBatchApplying] = useState(false);
+  const [viewMode, setViewMode] = useState<"suggestions" | "transcript">("suggestions");
+  const [transcript, setTranscript] = useState<TranscriptLine[] | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const clipById = useMemo(() => new Map(clips.map((c) => [c.id, c])), [clips]);
+  const resultsById = useMemo(() => new Map(results.map((r) => [r.id, r])), [results]);
 
   useEffect(() => {
     return () => {
@@ -133,6 +140,8 @@ export default function VoiceCorrectionPanel({
   async function startScan(scope: "CLIP" | "TIMELINE") {
     setError(null);
     setResults([]);
+    setViewMode("suggestions");
+    setTranscript(null);
     setStarting(true);
     try {
       const created = await startVoiceScan(projectId, {
@@ -233,6 +242,24 @@ export default function VoiceCorrectionPanel({
   async function openBatchModal() {
     if (!job) return;
     setBatchPreview(await getBatchPreview(projectId, job.id));
+  }
+
+  // Lazy — only fetched the first time the user actually switches to the
+  // Transcript tab, since a long video's full transcript is a much bigger
+  // payload than the (usually short) list of flagged repetitions the
+  // panel shows by default.
+  async function switchToTranscript() {
+    setViewMode("transcript");
+    if (!job || transcript !== null || transcriptLoading) return;
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    try {
+      setTranscript(await getVoiceScanTranscript(projectId, job.id));
+    } catch (err) {
+      setTranscriptError(err instanceof ApiError ? err.message : "Couldn't load the transcript.");
+    } finally {
+      setTranscriptLoading(false);
+    }
   }
 
   async function confirmBatch() {
@@ -399,44 +426,73 @@ export default function VoiceCorrectionPanel({
               </button>
             </div>
 
-            {pendingResults.some((r) => r.confidenceBucket === "HIGH") && (
-              <button onClick={openBatchModal} className="rounded-md bg-brand px-3 py-2 text-sm font-medium text-ink hover:bg-brand/90">
-                Correct All High-Confidence Repetitions
+            <div className="flex gap-1 rounded-md border border-line bg-panel p-0.5 text-xs">
+              <button
+                onClick={() => setViewMode("suggestions")}
+                className={`flex-1 rounded py-1.5 font-medium ${viewMode === "suggestions" ? "bg-brand text-ink" : "text-ink-muted hover:text-ink"}`}
+              >
+                Suggestions
               </button>
-            )}
-
-            <div className="flex flex-col gap-3">
-              {pendingResults.map((result) => (
-                <ResultCard
-                  key={result.id}
-                  result={result}
-                  asset={(() => {
-                    const clip = clipById.get(result.clipId);
-                    return clip ? mediaById.get(clip.mediaAssetId) : undefined;
-                  })()}
-                  onSeek={() => onSeek(result.repeatedStartMs)}
-                  onPlayBefore={() => play(result, "before")}
-                  onPlayAfter={() => play(result, "after")}
-                  onKeep={() => dismiss(result)}
-                  onRemove={() => applyOne(result, result.suggestedMode)}
-                  onRoomTone={() => applyOne(result, "AUDIO_ONLY")}
-                  onTrim={() => applyOne(result, "AUDIO_VIDEO_TRIM")}
-                />
-              ))}
-
-              {results
-                .filter((r) => r.status === "APPLIED")
-                .map((result) => (
-                  <div key={result.id} className="flex items-center justify-between rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs">
-                    <span className="truncate text-ink-muted">
-                      <span className="text-success">Corrected</span> · &quot;{result.repeatedText}&quot; at {formatTimecode(result.repeatedStartMs, true)}
-                    </span>
-                    <button onClick={() => undoOne(result)} className="shrink-0 text-ink-muted underline underline-offset-2 hover:text-ink">
-                      Undo
-                    </button>
-                  </div>
-                ))}
+              <button
+                onClick={switchToTranscript}
+                className={`flex-1 rounded py-1.5 font-medium ${viewMode === "transcript" ? "bg-brand text-ink" : "text-ink-muted hover:text-ink"}`}
+              >
+                Full Transcript
+              </button>
             </div>
+
+            {viewMode === "suggestions" ? (
+              <>
+                {pendingResults.some((r) => r.confidenceBucket === "HIGH") && (
+                  <button onClick={openBatchModal} className="rounded-md bg-brand px-3 py-2 text-sm font-medium text-ink hover:bg-brand/90">
+                    Correct All High-Confidence Repetitions
+                  </button>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  {pendingResults.map((result) => (
+                    <ResultCard
+                      key={result.id}
+                      result={result}
+                      asset={(() => {
+                        const clip = clipById.get(result.clipId);
+                        return clip ? mediaById.get(clip.mediaAssetId) : undefined;
+                      })()}
+                      onSeek={() => onSeek(result.repeatedStartMs)}
+                      onPlayBefore={() => play(result, "before")}
+                      onPlayAfter={() => play(result, "after")}
+                      onKeep={() => dismiss(result)}
+                      onRemove={() => applyOne(result, result.suggestedMode)}
+                      onRoomTone={() => applyOne(result, "AUDIO_ONLY")}
+                      onTrim={() => applyOne(result, "AUDIO_VIDEO_TRIM")}
+                    />
+                  ))}
+
+                  {results
+                    .filter((r) => r.status === "APPLIED")
+                    .map((result) => (
+                      <div key={result.id} className="flex items-center justify-between rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs">
+                        <span className="truncate text-ink-muted">
+                          <span className="text-success">Corrected</span> · &quot;{result.repeatedText}&quot; at {formatTimecode(result.repeatedStartMs, true)}
+                        </span>
+                        <button onClick={() => undoOne(result)} className="shrink-0 text-ink-muted underline underline-offset-2 hover:text-ink">
+                          Undo
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </>
+            ) : (
+              <TranscriptView
+                loading={transcriptLoading}
+                error={transcriptError}
+                lines={transcript}
+                resultsById={resultsById}
+                onSeek={onSeek}
+                onKeep={dismiss}
+                onCorrect={(result) => applyOne(result, result.suggestedMode)}
+              />
+            )}
           </div>
         )}
       </div>
@@ -568,6 +624,89 @@ function ResultCard({
           <TrashIcon width={11} height={11} /> Trim Audio &amp; Video
         </button>
       </div>
+    </div>
+  );
+}
+
+const SUGGESTION_COPY: Record<CorrectionMode, string> = {
+  AUDIO_VIDEO_TRIM: "Suggested fix: cut this line out entirely (audio & video).",
+  AUDIO_ONLY: "Suggested fix: replace this line's audio with room tone (video keeps playing).",
+};
+
+// The full scanned transcript in chronological order, in whatever script
+// Whisper produced (Hindi audio currently transcribes correctly but in
+// Urdu/Perso-Arabic script rather than Devanagari — a known model
+// limitation, not a bug in this view) — every line involved in a detected
+// repetition is highlighted directly in place, with the "kept" line and
+// the flagged duplicate both visible together so the mistake reads the
+// same way a person proofreading the script would spot it.
+function TranscriptView({
+  loading,
+  error,
+  lines,
+  resultsById,
+  onSeek,
+  onKeep,
+  onCorrect,
+}: {
+  loading: boolean;
+  error: string | null;
+  lines: TranscriptLine[] | null;
+  resultsById: Map<string, RepetitionResult>;
+  onSeek: (ms: number) => void;
+  onKeep: (result: RepetitionResult) => void;
+  onCorrect: (result: RepetitionResult) => void;
+}) {
+  if (loading) return <p className="text-sm text-ink-muted">Loading transcript…</p>;
+  if (error) return <p className="text-sm text-danger">{error}</p>;
+  if (!lines || lines.length === 0) return <p className="text-sm text-ink-muted">No transcript available for this scan.</p>;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {lines.map((line) => {
+        const result = line.repetitionResultId ? resultsById.get(line.repetitionResultId) : undefined;
+        const isFlaggedRepeat = line.role === "repeated" && result && result.status === "PENDING";
+        const isResolvedRepeat = line.role === "repeated" && result && result.status !== "PENDING";
+
+        return (
+          <div key={line.id} className="flex flex-col gap-1">
+            <button
+              onClick={() => onSeek(line.startMs)}
+              dir="auto"
+              className={`flex items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                isFlaggedRepeat
+                  ? result!.confidenceBucket === "HIGH"
+                    ? "bg-danger/15 text-ink"
+                    : "bg-amber-400/15 text-ink"
+                  : isResolvedRepeat
+                    ? result!.status === "APPLIED"
+                      ? "bg-success/10 text-ink-muted line-through decoration-success/60"
+                      : "text-ink-muted"
+                    : line.role === "original"
+                      ? "border-l-2 border-brand/50 bg-brand/5 text-ink"
+                      : "text-ink hover:bg-panel"
+              }`}
+            >
+              <span className="shrink-0 pt-0.5 font-mono text-[10px] tabular-nums text-ink-muted">{formatTimecode(line.startMs, true)}</span>
+              <span className="flex-1">{line.text}</span>
+            </button>
+
+            {isFlaggedRepeat && (
+              <div className="ml-2 flex flex-col gap-1.5 rounded-md border border-line bg-panel px-2.5 py-2 text-xs">
+                <p className="text-ink-muted">{SUGGESTION_COPY[result!.suggestedMode]}</p>
+                <div className="flex gap-1.5">
+                  <button onClick={() => onKeep(result!)} className="flex-1 rounded border border-line py-1 text-ink hover:border-brand">
+                    Keep Original
+                  </button>
+                  <button onClick={() => onCorrect(result!)} className="flex-1 rounded bg-danger py-1 font-medium text-ink hover:bg-danger/90">
+                    Apply Fix
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

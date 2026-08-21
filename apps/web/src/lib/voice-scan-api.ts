@@ -106,6 +106,26 @@ export interface BatchPreview {
   estimatedDurationRemovedMs: number;
 }
 
+// One line of the full chronological transcript — `role` is set only when
+// this line matches a RepetitionResult: "original" for the kept take,
+// "repeated" for the flagged duplicate. Everything else about the result
+// (confidence, correction status) rides along so the transcript view can
+// render the same highlighting/suggestion the pairwise review cards show,
+// without a second round trip.
+export interface TranscriptLine {
+  id: string;
+  trackId: string;
+  clipId: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  role: "original" | "repeated" | null;
+  repetitionResultId: string | null;
+  confidenceBucket: ConfidenceBucket | null;
+  status: RepetitionReviewStatus | null;
+  suggestedMode: CorrectionMode | null;
+}
+
 export function startVoiceScan(
   projectId: string,
   input: { scope: VoiceScanScope; trackId?: string; clipId?: string; sensitivityPreset?: SensitivityPreset; customThresholds?: CustomThresholds },
@@ -123,6 +143,10 @@ export function getVoiceScan(projectId: string, jobId: string) {
 
 export function getVoiceScanResults(projectId: string, jobId: string) {
   return apiFetch<RepetitionResult[]>(`/projects/${projectId}/voice-scans/${jobId}/results`);
+}
+
+export function getVoiceScanTranscript(projectId: string, jobId: string) {
+  return apiFetch<TranscriptLine[]>(`/projects/${projectId}/voice-scans/${jobId}/transcript`);
 }
 
 export function cancelVoiceScan(projectId: string, jobId: string) {
