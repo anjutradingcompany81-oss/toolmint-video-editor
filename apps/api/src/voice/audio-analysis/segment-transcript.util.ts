@@ -33,14 +33,55 @@ export function groupWordsIntoSegments(words: WordTiming[], maxPauseMs = 700): T
     const prevEndedSentence = SENTENCE_END_RE.test(prev.text.trim());
 
     if (pauseMs > maxPauseMs || prevEndedSentence) {
-      segments.push(toChunk(current));
+      segments.push(...splitOnImmediateRepeats(current).map(toChunk));
       current = [word];
     } else {
       current.push(word);
     }
   }
-  segments.push(toChunk(current));
+  segments.push(...splitOnImmediateRepeats(current).map(toChunk));
   return segments;
+}
+
+function normalizeWord(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\p{L}\p{M}\p{N}]/gu, "");
+}
+
+const MAX_REPEAT_PHRASE_WORDS = 6;
+
+// Pause-based grouping alone runs a word/phrase repeated *within one
+// breath* (no pause between the two repeats) into a single segment's
+// text — confirmed live on real Hindi content: "...raajneeti zyada hoti
+// zyada hoti" transcribed correctly as one continuous phrase, but the
+// repetition detector compares *pairs of segments*, so a duplicate
+// sitting inside one segment's own text was invisible to it. This finds
+// the longest immediately-adjacent repeated word sequence (checked from
+// MAX_REPEAT_PHRASE_WORDS down to 1) and splits the segment into
+// [context-before, repeat-occurrence-1, repeat-occurrence-2,
+// ...context-after via recursion] so the two occurrences become their
+// own directly-comparable segments — at which point the existing
+// segment-vs-segment detector already handles it correctly.
+export function splitOnImmediateRepeats(words: WordTiming[]): WordTiming[][] {
+  const maxLen = Math.min(MAX_REPEAT_PHRASE_WORDS, Math.floor(words.length / 2));
+  for (let len = maxLen; len >= 1; len--) {
+    for (let start = 0; start + len * 2 <= words.length; start++) {
+      const a = words.slice(start, start + len);
+      const b = words.slice(start + len, start + len * 2);
+      if (a.every((w, i) => normalizeWord(w.text) === normalizeWord(b[i].text) && normalizeWord(w.text) !== "")) {
+        const before = words.slice(0, start);
+        const after = words.slice(start + len * 2);
+        const groups: WordTiming[][] = [];
+        if (before.length > 0) groups.push(...splitOnImmediateRepeats(before));
+        groups.push(a, b);
+        if (after.length > 0) groups.push(...splitOnImmediateRepeats(after));
+        return groups;
+      }
+    }
+  }
+  return [words];
 }
 
 function toChunk(words: WordTiming[]): TranscriptChunk {
