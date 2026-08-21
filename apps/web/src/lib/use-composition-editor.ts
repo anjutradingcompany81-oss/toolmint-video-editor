@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "./api-client";
 import { getProject, type Project } from "./projects-api";
-import { getComposition, saveComposition, type Clip, type Timeline } from "./composition-api";
+import { getComposition, saveComposition, repackTrack, newVideoTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
 
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
 
@@ -16,10 +16,25 @@ const SAVE_DEBOUNCE_MS = 1500;
 const HISTORY_COALESCE_MS = 500;
 const HISTORY_LIMIT = 100;
 
+// The editor UI (page.tsx and everything under it) only knows about "the"
+// timeline as a single flat, ordered list of video clips — it predates the
+// v2 multitrack rebuild and hasn't been rebuilt into a real multitrack UI
+// yet (that's a later phase). This hook is the seam: it keeps the *real*
+// v2 Timeline (Track[] + Clip[], absolute positions) as the source of
+// truth, but exposes just one track's clips as a plain ordered array, and
+// re-derives that track's absolute positions from array order on every
+// edit — so from the UI's point of view nothing changed, while what's
+// actually persisted (and rendered) is genuine v2 data.
+//
+// Any other tracks/clips already in the timeline (e.g. created directly
+// via the API, as multitrack features land server-side ahead of their UI)
+// are preserved untouched across saves — this hook only ever reads or
+// writes the one video track it manages.
 export function useCompositionEditor(projectId: string) {
   const [project, setProject] = useState<Project | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
-  const [clips, setClips] = useState<Clip[]>([]);
+  const [trackId, setTrackId] = useState<string | null>(null);
+  const [clips, setClips] = useState<MediaClip[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -31,12 +46,14 @@ export function useCompositionEditor(projectId: string) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clipsRef = useRef(clips);
   const timelineRef = useRef(timeline);
+  const trackIdRef = useRef(trackId);
   useEffect(() => {
     clipsRef.current = clips;
     timelineRef.current = timeline;
-  }, [clips, timeline]);
+    trackIdRef.current = trackId;
+  }, [clips, timeline, trackId]);
 
-  const history = useRef<{ past: Clip[][]; future: Clip[][] }>({ past: [], future: [] });
+  const history = useRef<{ past: MediaClip[][]; future: MediaClip[][] }>({ past: [], future: [] });
   const lastEditAt = useRef(0);
 
   function syncHistoryFlags() {
@@ -58,9 +75,22 @@ export function useCompositionEditor(projectId: string) {
       try {
         const [proj, env] = await Promise.all([getProject(projectId), getComposition(projectId)]);
         if (cancelled) return;
+
+        let loadedTimeline = env.composition;
+        let videoTrack = loadedTimeline.tracks.find((t) => t.kind === "video");
+        if (!videoTrack) {
+          // Defensive only — every project is created with a default video
+          // track, and the v1->v2 migration guarantees one too. Rather
+          // than silently editing into a track that doesn't exist yet,
+          // add one so the editor still has somewhere to work.
+          videoTrack = newVideoTrack("Video 1", 0);
+          loadedTimeline = { ...loadedTimeline, tracks: [...loadedTimeline.tracks, videoTrack] };
+        }
+
         setProject(proj);
-        setTimeline(env.composition);
-        setClips(env.composition.clips);
+        setTimeline(loadedTimeline);
+        setTrackId(videoTrack.id);
+        setClips(clipsOnTrack(loadedTimeline.clips, videoTrack.id));
         resetHistory();
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof ApiError ? err.message : "Couldn't load the editor.");
@@ -83,16 +113,20 @@ export function useCompositionEditor(projectId: string) {
   }, []);
 
   const scheduleSave = useCallback(
-    (nextClips: Clip[]) => {
+    (nextClips: MediaClip[]) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         const current = timelineRef.current;
-        if (!current) return;
+        const currentTrackId = trackIdRef.current;
+        if (!current || !currentTrackId) return;
         setSaveStatus("saving");
         setSaveError(null);
         try {
-          const payload: Timeline = { ...current, clips: nextClips, updatedAt: new Date().toISOString() };
+          // Merge this track's edited clips back into the full clip list —
+          // clips on any other track are carried through unchanged.
+          const otherClips = current.clips.filter((c) => c.trackId !== currentTrackId);
+          const payload: Timeline = { ...current, clips: [...otherClips, ...nextClips], updatedAt: new Date().toISOString() };
           const env = await saveComposition(projectId, payload);
           setTimeline(env.composition);
           setSaveStatus("saved");
@@ -105,10 +139,15 @@ export function useCompositionEditor(projectId: string) {
     [projectId],
   );
 
-  function withClips(mutate: (prev: Clip[]) => Clip[]) {
-    if (!timelineRef.current) return;
+  function withClips(mutate: (prev: MediaClip[]) => Clip[]) {
+    const currentTrackId = trackIdRef.current;
+    if (!timelineRef.current || !currentTrackId) return;
     const prevClips = clipsRef.current;
-    const nextClips = mutate(prevClips);
+    const mutated = mutate(prevClips);
+    // The mutator only ever hands back clips for this one track, so this
+    // narrowing is safe — it exists to satisfy the Clip union type without
+    // scattering `as MediaClip` casts through every call site below.
+    const repacked = repackTrack(mutated, currentTrackId).filter((c): c is MediaClip => c.trackId === currentTrackId && c.kind !== "text");
     const now = Date.now();
 
     if (now - lastEditAt.current > HISTORY_COALESCE_MS) {
@@ -119,8 +158,8 @@ export function useCompositionEditor(projectId: string) {
     lastEditAt.current = now;
     syncHistoryFlags();
 
-    setClips(nextClips);
-    scheduleSave(nextClips);
+    setClips(repacked);
+    scheduleSave(repacked);
   }
 
   function undo() {
@@ -143,5 +182,13 @@ export function useCompositionEditor(projectId: string) {
     scheduleSave(next);
   }
 
-  return { project, timeline, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo };
+  return { project, timeline, trackId, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo };
 }
+
+function clipsOnTrack(clips: Clip[], trackId: string): MediaClip[] {
+  return clips
+    .filter((c): c is MediaClip => c.trackId === trackId && c.kind !== "text")
+    .sort((a, b) => a.startMs - b.startMs);
+}
+
+export type { Track };

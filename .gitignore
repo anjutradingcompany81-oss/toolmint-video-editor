@@ -23,6 +23,10 @@ npm-debug.log*
 # testing
 coverage/
 
+# AI Repetitive Voice Remover — downloaded Whisper model weights, cached
+# locally on first scan (see apps/api/src/voice/audio-analysis/whisper.service.ts)
+apps/api/.cache/
+
 # misc
 .DS_Store
 *.pem

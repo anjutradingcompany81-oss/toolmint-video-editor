@@ -30,6 +30,23 @@ jobs:
             set -e
             cd /opt/toolmint
             git pull
+
+            # ONE-TIME: v1->v2 timeline data migration (composition.schemaVersion
+            # 1.0 -> 2.0, flat Clip[] -> Track[]+Clip[]). Runs before the new
+            # v2-only API image goes live so there's no window where new code
+            # reads old-shape data. Safe to leave in / re-run — it only touches
+            # rows still at 1.0, so once production is migrated this is a fast
+            # no-op — but remove it in a follow-up commit once confirmed, since
+            # it still costs an extra image build on every deploy until then.
+            set -a; source deploy/.env.prod; set +a
+            mkdir -p backups
+            docker exec toolmint-postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "backups/pre-v2-migration-$(date +%Y%m%d-%H%M%S).sql"
+            docker build --target build -f apps/api/Dockerfile -t toolmint-api-migrate .
+            docker run --rm --network toolmint_net \
+              -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public" \
+              -w /repo/apps/api toolmint-api-migrate \
+              npx ts-node scripts/migrate-timeline-v2.ts --apply
+
             docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
             docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod exec -T -w /app/apps/api api npx prisma migrate deploy
             docker image prune -f

@@ -78,7 +78,17 @@ interface TimelinePanelProps {
   razorMode: boolean;
   onToggleRazorMode: () => void;
   onRazorClick: (ms: number) => void;
+  // AI Repetitive Voice Remover: colored indicators over detected
+  // repetitions — red (high-confidence, pending review), orange
+  // (lower-confidence, needs review), green (already corrected).
+  voiceMarkers?: { startMs: number; endMs: number; tone: "red" | "orange" | "green" }[];
 }
+
+const VOICE_MARKER_STYLES = {
+  red: "bg-danger",
+  orange: "bg-amber-400",
+  green: "bg-success",
+} as const;
 
 export default function TimelinePanel({
   layout,
@@ -105,6 +115,7 @@ export default function TimelinePanel({
   razorMode,
   onToggleRazorMode,
   onRazorClick,
+  voiceMarkers = [],
 }: TimelinePanelProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragFromIndex = useRef<number | null>(null);
@@ -310,6 +321,21 @@ export default function TimelinePanel({
                 </span>
               ))}
             </div>
+
+            {/* AI Repetitive Voice Remover markers */}
+            {voiceMarkers.length > 0 && (
+              <div className="pointer-events-none absolute -top-1 left-0 z-10 h-1.5 w-full">
+                {voiceMarkers.map((marker, i) => (
+                  <div
+                    key={i}
+                    title={`${marker.tone === "green" ? "Corrected" : "Possible repetition"}: ${formatTimecode(marker.startMs, true)}–${formatTimecode(marker.endMs, true)}`}
+                    className={`pointer-events-auto absolute h-full cursor-pointer rounded-full ${VOICE_MARKER_STYLES[marker.tone]}`}
+                    style={{ left: (marker.startMs / 1000) * pixelsPerSecond, width: Math.max(3, ((marker.endMs - marker.startMs) / 1000) * pixelsPerSecond) }}
+                    onClick={() => onSeek(marker.startMs)}
+                  />
+                ))}
+              </div>
+            )}
 
             {/* Clip row */}
             <div className="flex items-start gap-0.5" onDragLeave={() => setDragOverIndex(null)}>

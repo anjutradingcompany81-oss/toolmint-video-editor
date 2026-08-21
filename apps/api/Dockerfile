@@ -36,13 +36,27 @@ RUN npm run build --workspace apps/api
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends openssl python3 python3-venv python3-pip && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
 RUN npm ci --workspace apps/api --omit=dev
 COPY --from=build /repo/apps/api/dist apps/api/dist
+
+# AI Repetitive Voice Remover's speaker-diarization sidecar
+# (voice/audio-analysis/diarization.service.ts spawns this as a one-shot
+# subprocess per scan, never a persistent service). Isolated in its own
+# venv — bookworm's system Python refuses a bare `pip install` outside
+# one — so it can never conflict with anything Node-side. CPU-only torch,
+# since this VPS has no GPU. This is a genuinely heavy addition (several
+# GB once torch + pyannote's own dependencies are installed, and the
+# model weights themselves download on first real use, not at build
+# time) — see deploy/README.md's "AI Voice Remover resource requirements"
+# before enabling HUGGINGFACE_TOKEN in production.
+COPY apps/api/python apps/api/python
+RUN python3 -m venv apps/api/python/.venv \
+    && apps/api/python/.venv/bin/pip install --no-cache-dir -r apps/api/python/requirements.txt
 
 EXPOSE 4000
 CMD ["node", "apps/api/dist/main.js"]

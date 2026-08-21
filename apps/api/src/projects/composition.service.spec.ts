@@ -4,10 +4,13 @@ import type { PrismaService } from "../prisma/prisma.service";
 import type { ProjectsService } from "./projects.service";
 import type { Composition } from "./composition.schema";
 
+const TRACK_ID = "track_1";
+
 function buildComposition(overrides: Partial<Composition> = {}): Composition {
   return {
-    schemaVersion: "1.0",
-    clips: [{ id: "clip_1", mediaAssetId: "med_1", trimInMs: 0, trimOutMs: 0, volume: 1, muted: false }],
+    schemaVersion: "2.0",
+    tracks: [{ id: TRACK_ID, kind: "video", name: "Video 1", order: 0, locked: false, hidden: false, muted: false, solo: false }],
+    clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000, trimInMs: 0, trimOutMs: 0, volume: 1, muted: false, speedPercent: 100, transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }, audioPatches: [] }],
     updatedAt: new Date().toISOString(),
     ...overrides,
   };
@@ -72,52 +75,94 @@ describe("CompositionService", () => {
     });
 
     it("rejects a composition missing required fields", async () => {
-      await expect(service.save("user_1", "proj_1", { schemaVersion: "1.0" })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.save("user_1", "proj_1", { schemaVersion: "2.0" })).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.projectVersion.create).not.toHaveBeenCalled();
     });
 
-    it("fills in defaults for a clip that only specifies id and mediaAssetId", async () => {
-      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1" }] };
+    it("fills in defaults for a clip that only specifies its required fields", async () => {
+      const composition = {
+        ...buildComposition(),
+        clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000 }],
+      };
       prisma.projectVersion.create.mockResolvedValue({ id: "ver_3", composition, createdAt: new Date() });
 
       await service.save("user_1", "proj_1", composition);
 
       const savedClip = prisma.projectVersion.create.mock.calls[0][0].data.composition.clips[0];
-      expect(savedClip).toMatchObject({ trimInMs: 0, trimOutMs: 0, volume: 1, muted: false });
+      expect(savedClip).toMatchObject({ trimInMs: 0, trimOutMs: 0, volume: 1, muted: false, speedPercent: 100 });
+      expect(savedClip.transform).toEqual({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 });
     });
 
     it("rejects a clip with a negative trim offset", async () => {
-      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1", trimInMs: -100 }] };
+      const composition = {
+        ...buildComposition(),
+        clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000, trimInMs: -100 }],
+      };
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it("rejects a clip missing its mediaAssetId", async () => {
-      const composition = { ...buildComposition(), clips: [{ id: "clip_1" }] };
+      const composition = { ...buildComposition(), clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", startMs: 0, durationMs: 1000 }] };
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it("rejects a volume outside the 0-2 range", async () => {
-      const composition = { ...buildComposition(), clips: [{ id: "clip_1", mediaAssetId: "med_1", volume: 3 }] };
+      const composition = {
+        ...buildComposition(),
+        clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000, volume: 3 }],
+      };
 
       await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it("preserves clip array order (order is timeline order)", async () => {
+    it("rejects a clip that references a track that doesn't exist", async () => {
+      const composition = {
+        ...buildComposition(),
+        clips: [{ id: "clip_1", trackId: "missing_track", kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000 }],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("rejects a clip whose kind doesn't match its track's kind", async () => {
+      const composition = {
+        ...buildComposition(),
+        tracks: [{ id: TRACK_ID, kind: "audio", name: "Music", order: 0, locked: false, hidden: false, muted: false, solo: false }],
+        clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000 }],
+      };
+
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("rejects two clips overlapping in time on the same track", async () => {
       const composition = {
         ...buildComposition(),
         clips: [
-          { id: "clip_1", mediaAssetId: "med_1" },
-          { id: "clip_2", mediaAssetId: "med_2" },
+          { id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000 },
+          { id: "clip_2", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_2", startMs: 500, durationMs: 1000 },
         ],
       };
-      prisma.projectVersion.create.mockResolvedValue({ id: "ver_4", composition, createdAt: new Date() });
 
-      await service.save("user_1", "proj_1", composition);
+      await expect(service.save("user_1", "proj_1", composition)).rejects.toBeInstanceOf(BadRequestException);
+    });
 
-      const savedClips = prisma.projectVersion.create.mock.calls[0][0].data.composition.clips;
-      expect(savedClips.map((c: { id: string }) => c.id)).toEqual(["clip_1", "clip_2"]);
+    it("allows clips on different tracks to overlap in time — that's compositing, not a conflict", async () => {
+      const composition = {
+        ...buildComposition(),
+        tracks: [
+          { id: "v1", kind: "video", name: "Video 1", order: 0, locked: false, hidden: false, muted: false, solo: false },
+          { id: "v2", kind: "overlay", name: "Logo", order: 1, locked: false, hidden: false, muted: false, solo: false },
+        ],
+        clips: [
+          { id: "clip_1", trackId: "v1", kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 5000 },
+          { id: "clip_2", trackId: "v2", kind: "overlay", mediaAssetId: "med_2", startMs: 1000, durationMs: 2000 },
+        ],
+      };
+      prisma.projectVersion.create.mockResolvedValue({ id: "ver_5", composition, createdAt: new Date() });
+
+      await expect(service.save("user_1", "proj_1", composition)).resolves.toBeDefined();
     });
   });
 });

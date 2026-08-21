@@ -6,13 +6,14 @@ import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
-import { newClip, splitClip, clipDurationMs, removeRange, type Clip } from "@/lib/composition-api";
+import { newVideoClip, splitClip, removeRangeOnTrack, type MediaClip } from "@/lib/composition-api";
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
 import PreviewPanel from "./preview-panel";
 import TimelinePanel from "./timeline-panel";
 import PropertiesPanel from "./properties-panel";
 import ExportModal from "./export-modal";
+import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -41,7 +42,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const { projectId } = use(params);
   const { status } = useRequireAuth();
 
-  const { project, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo } =
+  const { project, trackId, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo } =
     useCompositionEditor(projectId);
 
   const [media, setMedia] = useState<MediaAsset[]>([]);
@@ -56,6 +57,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [markOutMs, setMarkOutMs] = useState<number | null>(null);
   const [razorMode, setRazorMode] = useState(false);
   const [message, setMessage] = useState<EditorMessage | null>(null);
+  const [voiceCorrectionOpen, setVoiceCorrectionOpen] = useState(false);
+  const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -74,9 +77,10 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
 
   const mediaById = useMemo(() => new Map(media.map((m) => [m.id, m])), [media]);
 
-  // Same fallback (0 for an unresolved/still-processing asset) the layout
-  // memo below uses, so cut/split math never disagrees with what's drawn.
-  const sourceDurationOfClip = useCallback((clip: Clip) => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, [mediaById]);
+  // Same fallback (0 for an unresolved/still-processing asset) every other
+  // duration calculation here uses, so cut/split math never disagrees with
+  // what's drawn.
+  const sourceDurationOfClip = useCallback((clip: MediaClip) => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, [mediaById]);
 
   useEffect(() => {
     if (!message) return;
@@ -84,17 +88,11 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     return () => clearTimeout(timer);
   }, [message]);
 
+  // Clips already carry their own absolute startMs/durationMs (the v2
+  // model) — no need to re-derive position from array order the way the
+  // old flat-clip model had to.
   const layout: ClipLayoutEntry[] = useMemo(() => {
-    const entries: ClipLayoutEntry[] = [];
-    let cursor = 0;
-    for (const clip of clips) {
-      const asset = mediaById.get(clip.mediaAssetId);
-      const sourceDurationMs = asset?.durationMs ?? 0;
-      const durationMs = clipDurationMs(clip, sourceDurationMs);
-      entries.push({ clip, asset, startMs: cursor, durationMs });
-      cursor += durationMs;
-    }
-    return entries;
+    return clips.map((clip) => ({ clip, asset: mediaById.get(clip.mediaAssetId), startMs: clip.startMs, durationMs: clip.durationMs }));
   }, [clips, mediaById]);
 
   const totalDurationMs = layout.length > 0 ? layout[layout.length - 1].startMs + layout[layout.length - 1].durationMs : 0;
@@ -123,9 +121,14 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
 
   const addToTimeline = useCallback(
     (assetId: string) => {
-      withClips((prev) => [...prev, newClip(assetId)]);
+      if (!trackId) return;
+      const sourceDurationMs = mediaById.get(assetId)?.durationMs ?? 0;
+      withClips((prev) => {
+        const endMs = prev.reduce((max, c) => Math.max(max, c.startMs + c.durationMs), 0);
+        return [...prev, newVideoClip(trackId, assetId, endMs, sourceDurationMs)];
+      });
     },
-    [withClips],
+    [withClips, trackId, mediaById],
   );
 
   const trimClip = useCallback(
@@ -259,7 +262,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   // range (or a whole clip) is inherently a ripple delete — there's no
   // gap to leave behind, and so no separate "standard delete" mode exists.
   const cutSelection = useCallback(() => {
-    if (markInMs === null || markOutMs === null || markOutMs <= markInMs) {
+    if (markInMs === null || markOutMs === null || markOutMs <= markInMs || !trackId) {
       setMessage({ text: "Select the beginning and end of the unwanted section.", tone: "error" });
       return;
     }
@@ -269,7 +272,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     );
     if (!confirmed) return;
 
-    const result = removeRange(clips, sourceDurationOfClip, markInMs, markOutMs);
+    const result = removeRangeOnTrack(clips, trackId, sourceDurationOfClip, markInMs, markOutMs);
     if (!result.ok) {
       setMessage({ text: result.message, tone: "error" });
       return;
@@ -279,7 +282,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     clearMarks();
     player.seekTo(markInMs);
     setMessage({ text: "Selected portion removed successfully. The original video remains unchanged.", tone: "success" });
-  }, [markInMs, markOutMs, clips, sourceDurationOfClip, withClips, clearMarks, player]);
+  }, [markInMs, markOutMs, clips, trackId, sourceDurationOfClip, withClips, clearMarks, player]);
 
   // Delete / Backspace / Shift+Delete: a marked range takes priority over
   // a selected clip. Shift+Delete is offered as the familiar "ripple
@@ -383,6 +386,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         onRedo={redo}
         onExport={() => setExportOpen(true)}
         exportDisabled={clips.length === 0}
+        onToggleVoiceCorrection={() => setVoiceCorrectionOpen((v) => !v)}
+        voiceCorrectionOpen={voiceCorrectionOpen}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -429,6 +434,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             razorMode={razorMode}
             onToggleRazorMode={() => setRazorMode((v) => !v)}
             onRazorClick={handleRazorClick}
+            voiceMarkers={voiceMarkers}
           />
         </div>
 
@@ -439,6 +445,19 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onSetMuted={(muted) => selectedClipId && setClipMuted(selectedClipId, muted)}
           onReset={() => selectedClipId && resetClip(selectedClipId)}
           onDelete={() => selectedClipId && deleteClip(selectedClipId)}
+        />
+
+        <VoiceCorrectionPanel
+          open={voiceCorrectionOpen}
+          onClose={() => setVoiceCorrectionOpen(false)}
+          projectId={projectId}
+          trackId={trackId}
+          clips={clips}
+          selectedClipId={selectedClipId}
+          mediaById={mediaById}
+          onSeek={player.seekTo}
+          withClips={withClips}
+          onMarkersChange={setVoiceMarkers}
         />
       </div>
 

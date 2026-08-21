@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MediaAsset } from "./projects-api";
-import type { Clip } from "./composition-api";
+import type { MediaClip } from "./composition-api";
 
 export interface ClipLayoutEntry {
-  clip: Clip;
+  clip: MediaClip;
   asset: MediaAsset | undefined;
   startMs: number;
   durationMs: number;
@@ -13,11 +13,13 @@ export interface ClipLayoutEntry {
 
 const EPSILON_MS = 30;
 
-// Drives a single <video> element through an ordered list of clips so
-// playback looks continuous across clip (and source-file) boundaries —
-// ProCut has no multi-track compositing, so a plain sequential player is
-// all the preview needs (see merge-ffmpeg.util.ts on the backend, which
-// takes the same "just concatenate in order" approach for the real export).
+// Drives a single <video> element through the editor's one managed video
+// track so playback looks continuous across clip (and source-file)
+// boundaries. The real export pipeline composites full multitrack —
+// overlays, a separate audio mix — (see merge-ffmpeg.util.ts on the
+// backend); this preview player intentionally hasn't grown that same
+// real-time compositing yet, since the editor UI itself is still
+// single-track for this phase.
 export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: number) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
@@ -42,7 +44,7 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
     return arr.length - 1;
   }, []);
 
-  const applyClipAV = useCallback((video: HTMLVideoElement, clip: Clip) => {
+  const applyClipAV = useCallback((video: HTMLVideoElement, clip: MediaClip) => {
     video.muted = clip.muted;
     video.volume = clip.muted ? 0 : clip.volume;
   }, []);

@@ -56,6 +56,61 @@ enum ExportStatus {
   CANCELLED
 }
 
+enum VoiceScanScope {
+  CLIP
+  TIMELINE
+}
+
+enum VoiceScanStatus {
+  QUEUED
+  EXTRACTING_AUDIO
+  DETECTING_SPEECH
+  TRANSCRIBING
+  DIARIZING
+  COMPARING
+  PREPARING_SUGGESTIONS
+  COMPLETED
+  FAILED
+  CANCELLED
+  // Set when the user pauses mid-scan — distinct from CANCELLED so the
+  // job's checkpoint (completed chunks) stays around for a resume instead
+  // of being treated as abandoned.
+  PAUSED
+}
+
+enum SensitivityPreset {
+  LOW
+  BALANCED
+  HIGH
+  CUSTOM
+}
+
+enum RepetitionKind {
+  WORD
+  PHRASE
+  SENTENCE
+  CLIP_OVERLAP
+  SCENE_JOIN
+  RENDER_DUPLICATE
+}
+
+enum ConfidenceBucket {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum CorrectionMode {
+  AUDIO_ONLY
+  AUDIO_VIDEO_TRIM
+}
+
+enum RepetitionReviewStatus {
+  PENDING
+  APPLIED
+  DISMISSED
+}
+
 model User {
   id                String    @id @default(cuid())
   email             String    @unique
@@ -169,6 +224,7 @@ model Project {
   versions      ProjectVersion[]
   mediaAssets   MediaAsset[]
   exportJobs    ExportJob[]
+  voiceScanJobs VoiceScanJob[]
 
   @@index([workspaceId])
   @@map("projects")
@@ -213,9 +269,18 @@ model MediaAsset {
   // whatever pixel width the clip occupies. Null for images/documents, or
   // if the file has no audio track (e.g. a silent video).
   waveformPeaks Json?
+  // Cached AI voice-analysis output for this source file, keyed by nothing
+  // but the asset itself — since the source is immutable (non-destructive
+  // editing), a transcript/fingerprint computed once is valid forever, so
+  // re-scanning a project that reuses the same clip never re-transcribes
+  // it. Shape: { language, chunks: [{ startMs, endMs, text, mfcc: number[] }] }
+  // (see apps/api/src/voice/audio-analysis/transcript-cache.util.ts).
+  transcriptCache Json?
   checksum    String?
   uploadedById String
   createdAt   DateTime          @default(now())
+
+  repetitionResults RepetitionResult[]
 
   @@index([projectId])
   @@map("media_assets")
@@ -246,6 +311,82 @@ model ExportJob {
 
   @@index([projectId, createdAt])
   @@map("export_jobs")
+}
+
+model VoiceScanJob {
+  id                 String            @id @default(cuid())
+  projectId          String
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scope              VoiceScanScope
+  // Only set for scope=CLIP — which single clip (on which track) to scan.
+  // Both null for scope=TIMELINE (every video/audio clip on the project's
+  // latest saved version at scan time).
+  trackId            String?
+  clipId             String?
+  status             VoiceScanStatus   @default(QUEUED)
+  // Human-readable current stage ("Extracting audio", "Transcribing
+  // dialogue", ...) — the UI shows this directly rather than mapping
+  // `status` through its own copy, so adding a stage never means touching
+  // frontend strings in two places.
+  stageLabel         String?
+  progress           Int               @default(0)
+  sensitivityPreset  SensitivityPreset @default(BALANCED)
+  // Only meaningful when sensitivityPreset=CUSTOM — see
+  // voice/audio-analysis/sensitivity.ts for the shape and defaults.
+  customThresholds   Json?
+  cancelRequested    Boolean           @default(false)
+  pauseRequested     Boolean           @default(false)
+  // { completedAssetIds: string[], completedChunks: { assetId, chunkIndex }[] }
+  // — lets a resumed scan skip audio that was already transcribed/compared
+  // rather than starting over from zero.
+  checkpoint         Json?
+  errorMessage       String?
+  requestedById      String
+  createdAt          DateTime          @default(now())
+  completedAt        DateTime?
+
+  results            RepetitionResult[]
+
+  @@index([projectId, createdAt])
+  @@map("voice_scan_jobs")
+}
+
+model RepetitionResult {
+  id                    String                 @id @default(cuid())
+  voiceScanJobId        String
+  voiceScanJob          VoiceScanJob           @relation(fields: [voiceScanJobId], references: [id], onDelete: Cascade)
+  // The clip/track this repetition was found on, at scan time — used to
+  // locate it on the timeline (jump playhead, draw the marker) and to
+  // apply a correction. If the clip has since been deleted/moved off that
+  // track, applying the correction is rejected with a clear error rather
+  // than silently editing the wrong thing.
+  trackId               String
+  clipId                String
+  mediaAssetId           String
+  mediaAsset            MediaAsset             @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+  kind                  RepetitionKind
+  // Timeline-absolute ms, matching the composition's own coordinate space
+  // at scan time.
+  originalStartMs       Int
+  originalEndMs         Int
+  repeatedStartMs       Int
+  repeatedEndMs         Int
+  originalText          String
+  repeatedText          String
+  speakerLabel          String?
+  transcriptSimilarity  Float
+  audioSimilarity       Float
+  timingGapMs           Int
+  confidenceScore       Float
+  confidenceBucket      ConfidenceBucket
+  suggestedMode         CorrectionMode
+  status                RepetitionReviewStatus @default(PENDING)
+  appliedMode           CorrectionMode?
+  createdAt             DateTime               @default(now())
+
+  @@index([voiceScanJobId])
+  @@index([mediaAssetId])
+  @@map("repetition_results")
 }
 
 model AuditLog {

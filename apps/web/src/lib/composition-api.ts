@@ -1,22 +1,80 @@
 import { apiFetch } from "./api-client";
 
-// ProCut's whole editing model: one project = one ordered list of clips.
-// No scenes, no tracks — the merge is always a straight concat of clips in
-// array order, and array order *is* the timeline order.
-export interface Clip {
+// v2 timeline: multiple tracks, each holding clips with an *absolute*
+// timeline position (startMs) — mirrors apps/api/src/projects/composition.schema.ts
+// exactly. "Music" vs "Voice-over", or "Titles" vs "Captions", are
+// deliberately not separate track kinds — just audio-kind (or text-kind)
+// tracks with a different user-given name.
+export type TrackKind = "video" | "audio" | "text" | "overlay";
+
+export interface Track {
   id: string;
+  kind: TrackKind;
+  name: string;
+  order: number;
+  locked: boolean;
+  hidden: boolean;
+  muted: boolean;
+  solo: boolean;
+}
+
+export interface Transform {
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  opacity: number;
+}
+
+export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+
+interface BaseClip {
+  id: string;
+  trackId: string;
+  startMs: number;
+  durationMs: number;
+}
+
+// AI Repetitive Voice Remover, "audio-only correction": a sub-range of
+// this clip's own audio (clip-local coordinates, [0, durationMs)) that
+// plays room tone instead of the real source audio — used when removing
+// a duplicated line while preserving the video's duration. See
+// apps/api/src/render/merge-ffmpeg.util.ts for how this is rendered.
+export interface AudioPatch {
+  id: string;
+  startMs: number;
+  endMs: number;
+  roomToneSourceStartMs?: number;
+  roomToneSourceEndMs?: number;
+  repetitionResultId?: string;
+}
+
+export interface MediaClip extends BaseClip {
+  kind: "video" | "audio" | "overlay";
   mediaAssetId: string;
-  // Offsets into the *source* file — trimOutMs counts back from the
-  // source's own end, so trimIn/trimOut stay valid regardless of how a
-  // later split divides this range.
   trimInMs: number;
   trimOutMs: number;
   volume: number;
   muted: boolean;
+  speedPercent: number;
+  transform: Transform;
+  audioPatches: AudioPatch[];
 }
 
+export interface TextClip extends BaseClip {
+  kind: "text";
+  content: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  transform: Transform;
+}
+
+export type Clip = MediaClip | TextClip;
+
 export interface Timeline {
-  schemaVersion: "1.0";
+  schemaVersion: "2.0";
+  tracks: Track[];
   clips: Clip[];
   updatedAt: string;
 }
@@ -42,66 +100,150 @@ function randomId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function newClip(mediaAssetId: string): Clip {
-  return { id: randomId("clip"), mediaAssetId, trimInMs: 0, trimOutMs: 0, volume: 1, muted: false };
-}
-
-// A clip's own playable span after trimming, given the full source
-// duration — clamped so a clip can never shrink to nothing.
 export const MIN_CLIP_DURATION_MS = 200;
 
-export function clipDurationMs(clip: Pick<Clip, "trimInMs" | "trimOutMs">, sourceDurationMs: number): number {
-  return Math.max(MIN_CLIP_DURATION_MS, sourceDurationMs - clip.trimInMs - clip.trimOutMs);
+export function clipDurationFromTrim(sourceDurationMs: number, trimInMs: number, trimOutMs: number): number {
+  return Math.max(MIN_CLIP_DURATION_MS, sourceDurationMs - trimInMs - trimOutMs);
 }
 
-// Splits one clip into two at `offsetMs` into its own playable span —
-// used by the timeline's split-at-playhead action. Both halves reference
-// the same source media; the cut point becomes the first half's trim-out
-// and the second half's trim-in.
-export function splitClip(clip: Clip, sourceDurationMs: number, offsetMs: number): [Clip, Clip] | null {
-  const duration = clipDurationMs(clip, sourceDurationMs);
-  if (offsetMs < MIN_CLIP_DURATION_MS || offsetMs > duration - MIN_CLIP_DURATION_MS) return null;
+export function newVideoClip(trackId: string, mediaAssetId: string, startMs: number, sourceDurationMs: number): MediaClip {
+  return {
+    id: randomId("clip"),
+    trackId,
+    kind: "video",
+    mediaAssetId,
+    startMs,
+    durationMs: clipDurationFromTrim(sourceDurationMs, 0, 0),
+    trimInMs: 0,
+    trimOutMs: 0,
+    volume: 1,
+    muted: false,
+    speedPercent: 100,
+    transform: { ...DEFAULT_TRANSFORM },
+    audioPatches: [],
+  };
+}
+
+// Too thin a sliver of a patch to matter (leftover after clamping to a new
+// clip window during a trim/split) isn't worth keeping — the tiny gap it
+// would leave just plays real source audio instead, which is harmless.
+const MIN_PATCH_DURATION_MS = 50;
+
+// Remaps audioPatches from a clip's *old* local coordinate space into a
+// *new* one that only spans [windowStartMs, windowEndMs) of the old space
+// (windowStartMs becomes the new 0) — used whenever a clip carrying
+// patches gets trimmed or split, so a correction never silently points at
+// the wrong slice of the (possibly now-shorter, possibly repositioned)
+// clip. A patch that falls entirely outside the kept window is dropped;
+// one that straddles the boundary is clamped to it.
+function remapAudioPatches(patches: AudioPatch[], windowStartMs: number, windowEndMs: number): AudioPatch[] {
+  const result: AudioPatch[] = [];
+  for (const patch of patches) {
+    const clampedStart = Math.max(patch.startMs, windowStartMs);
+    const clampedEnd = Math.min(patch.endMs, windowEndMs);
+    if (clampedEnd - clampedStart < MIN_PATCH_DURATION_MS) continue;
+    result.push({ ...patch, startMs: clampedStart - windowStartMs, endMs: clampedEnd - windowStartMs });
+  }
+  return result;
+}
+
+// Adds one room-tone patch to a specific clip (AI Repetitive Voice
+// Remover's "audio-only correction" / "Replace with Room Tone"). The
+// clip must not already have an overlapping patch in that range — callers
+// only ever pass ranges derived from a fresh scan result, which by
+// construction can't already be patched.
+export function addAudioPatch(clips: Clip[], clipId: string, patch: Omit<AudioPatch, "id">): Clip[] {
+  return clips.map((c) => {
+    if (c.id !== clipId || c.kind === "text") return c;
+    const next = [...c.audioPatches, { ...patch, id: randomId("patch") }].sort((a, b) => a.startMs - b.startMs);
+    return { ...c, audioPatches: next };
+  });
+}
+
+// Removes a previously-applied patch (AI Repetitive Voice Remover's
+// "Undo Correction" / "Reset to Original Audio" for one result) — the
+// clip's real source audio plays there again, unchanged, since the patch
+// never touched it.
+export function removeAudioPatch(clips: Clip[], clipId: string, patchId: string): Clip[] {
+  return clips.map((c) => (c.id === clipId && c.kind !== "text" ? { ...c, audioPatches: c.audioPatches.filter((p) => p.id !== patchId) } : c));
+}
+
+export function newVideoTrack(name: string, order: number): Track {
+  return { id: randomId("track"), kind: "video", name, order, locked: false, hidden: false, muted: false, solo: false };
+}
+
+// Re-packs every clip on one track so they sit back-to-back with no gaps,
+// in ascending order of their *current* startMs — array order alone is no
+// longer authoritative once clips carry absolute positions, so ordering
+// has to be read from startMs and gaps have to be closed explicitly after
+// every mutation (add/trim/split/reorder/remove) instead of falling out
+// for free the way a flat position-less array gave it for free before.
+export function repackTrack(clips: Clip[], trackId: string): Clip[] {
+  const onTrack = [...clips].filter((c) => c.trackId === trackId).sort((a, b) => a.startMs - b.startMs);
+  const repositioned = new Map<string, number>();
+  let cursor = 0;
+  for (const clip of onTrack) {
+    repositioned.set(clip.id, cursor);
+    cursor += clip.durationMs;
+  }
+  return clips.map((c) => (repositioned.has(c.id) ? { ...c, startMs: repositioned.get(c.id)! } : c));
+}
+
+// Splits one media clip into two at `offsetMs` into its own timeline
+// duration. Both halves reference the same source media and stay on the
+// same track, back-to-back — no repack needed since the split doesn't
+// change the track's total span.
+export function splitClip(clip: MediaClip, sourceDurationMs: number, offsetMs: number): [MediaClip, MediaClip] | null {
+  if (offsetMs < MIN_CLIP_DURATION_MS || offsetMs > clip.durationMs - MIN_CLIP_DURATION_MS) return null;
 
   const splitSourceMs = clip.trimInMs + offsetMs;
-  const first: Clip = { ...clip, id: randomId("clip"), trimOutMs: sourceDurationMs - splitSourceMs };
-  const second: Clip = { ...clip, id: randomId("clip"), trimInMs: splitSourceMs };
+  const first: MediaClip = {
+    ...clip,
+    id: randomId("clip"),
+    durationMs: offsetMs,
+    trimOutMs: sourceDurationMs - splitSourceMs,
+    audioPatches: remapAudioPatches(clip.audioPatches, 0, offsetMs),
+  };
+  const second: MediaClip = {
+    ...clip,
+    id: randomId("clip"),
+    startMs: clip.startMs + offsetMs,
+    durationMs: clip.durationMs - offsetMs,
+    trimInMs: splitSourceMs,
+    audioPatches: remapAudioPatches(clip.audioPatches, offsetMs, clip.durationMs),
+  };
   return [first, second];
 }
 
 export type RemoveRangeResult = { ok: true; clips: Clip[] } | { ok: false; message: string };
 
-// "Cut unwanted middle portion": removes an absolute timeline range
-// [startMs, endMs) from the whole clip array, splitting/trimming/dropping
-// whichever clips it overlaps. Because ProCut's timeline has no absolute
-// clip positions — array order alone *is* the timeline order — the result
-// is automatically contiguous with no gap to close: this is what "ripple
-// delete" means here, and it's the only delete behavior this data model
-// can represent (a gap-leaving "standard delete" would need clips to carry
-// their own absolute start time, which they deliberately don't).
-//
-// Each clip is handled independently by intersecting its own timeline span
-// with the cut range and mapping that intersection back into *source* time
-// (via its current trimIn/trimOut): a clip with no overlap is untouched, a
-// clip fully inside the cut range is dropped, a clip overlapping only one
-// edge is trimmed on that side, and a clip that fully contains the cut
-// range is split in two — the exact "remove the unwanted middle of this
-// one clip" case the feature is named for.
-export function removeRange(clips: Clip[], sourceDurationOf: (clip: Clip) => number, startMs: number, endMs: number): RemoveRangeResult {
+// "Cut unwanted middle portion": removes an absolute range [startMs, endMs)
+// from one track, splitting/trimming/dropping whichever clips on that
+// track it overlaps, then re-packs the track so the remainder joins with
+// no gap — this is the only delete this timeline can represent, since
+// clips have no notion of a "gap" to leave behind.
+export function removeRangeOnTrack(
+  clips: Clip[],
+  trackId: string,
+  sourceDurationOf: (clip: MediaClip) => number,
+  startMs: number,
+  endMs: number,
+): RemoveRangeResult {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) {
     return { ok: false, message: "Select a valid start and end point before cutting." };
   }
 
-  const next: Clip[] = [];
-  let cursor = 0;
   let touchedAnything = false;
+  const next: Clip[] = [];
 
   for (const clip of clips) {
-    const sourceDurationMs = sourceDurationOf(clip);
-    const durationMs = clipDurationMs(clip, sourceDurationMs);
-    const clipStart = cursor;
-    const clipEnd = cursor + durationMs;
-    cursor = clipEnd;
+    if (clip.trackId !== trackId || clip.kind === "text") {
+      next.push(clip);
+      continue;
+    }
 
+    const clipStart = clip.startMs;
+    const clipEnd = clip.startMs + clip.durationMs;
     const overlapStart = Math.max(clipStart, startMs);
     const overlapEnd = Math.min(clipEnd, endMs);
 
@@ -111,6 +253,7 @@ export function removeRange(clips: Clip[], sourceDurationOf: (clip: Clip) => num
     }
     touchedAnything = true;
 
+    const sourceDurationMs = sourceDurationOf(clip);
     const srcIn = clip.trimInMs;
     const srcOut = sourceDurationMs - clip.trimOutMs;
     const srcOverlapStart = srcIn + (overlapStart - clipStart);
@@ -121,24 +264,48 @@ export function removeRange(clips: Clip[], sourceDurationOf: (clip: Clip) => num
     const keepsLeft = leftDurationMs >= MIN_CLIP_DURATION_MS;
     const keepsRight = rightDurationMs >= MIN_CLIP_DURATION_MS;
 
+    const localCutStart = overlapStart - clipStart;
+    const localCutEnd = overlapEnd - clipStart;
+
     if (keepsLeft && keepsRight) {
-      // The cut range falls entirely inside this one clip — split it in
-      // two, same as a manual split-at-playhead on each edge.
-      next.push({ ...clip, id: randomId("clip"), trimOutMs: sourceDurationMs - srcOverlapStart });
-      next.push({ ...clip, id: randomId("clip"), trimInMs: srcOverlapEnd });
+      // The cut falls entirely inside this clip — split it in two.
+      next.push({
+        ...clip,
+        id: randomId("clip"),
+        durationMs: leftDurationMs,
+        trimOutMs: sourceDurationMs - srcOverlapStart,
+        audioPatches: remapAudioPatches(clip.audioPatches, 0, localCutStart),
+      });
+      next.push({
+        ...clip,
+        id: randomId("clip"),
+        startMs: clip.startMs + localCutEnd,
+        durationMs: rightDurationMs,
+        trimInMs: srcOverlapEnd,
+        audioPatches: remapAudioPatches(clip.audioPatches, localCutEnd, clip.durationMs),
+      });
     } else if (keepsLeft) {
-      // Only trimming one edge — same clip, just shorter, so it keeps its
-      // id (matches how drag-to-trim already behaves elsewhere).
-      next.push({ ...clip, trimOutMs: sourceDurationMs - srcOverlapStart });
+      next.push({
+        ...clip,
+        durationMs: leftDurationMs,
+        trimOutMs: sourceDurationMs - srcOverlapStart,
+        audioPatches: remapAudioPatches(clip.audioPatches, 0, localCutStart),
+      });
     } else if (keepsRight) {
-      next.push({ ...clip, trimInMs: srcOverlapEnd });
+      next.push({
+        ...clip,
+        startMs: clip.startMs + localCutEnd,
+        durationMs: rightDurationMs,
+        trimInMs: srcOverlapEnd,
+        audioPatches: remapAudioPatches(clip.audioPatches, localCutEnd, clip.durationMs),
+      });
     }
-    // Neither side survives — the clip is fully consumed by the cut, drop it.
+    // Neither side survives — fully consumed by the cut, drop it.
   }
 
   if (!touchedAnything) {
     return { ok: false, message: "The selected range doesn't overlap any clip on the timeline." };
   }
 
-  return { ok: true, clips: next };
+  return { ok: true, clips: repackTrack(next, trackId) };
 }

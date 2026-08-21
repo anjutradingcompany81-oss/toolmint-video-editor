@@ -25,6 +25,14 @@ volumes:
     name: toolmint_redis_data
   toolmint_minio_data:
     name: toolmint_minio_data
+  # AI Repetitive Voice Remover's downloaded model weights (Whisper via
+  # transformers.js, and pyannote's diarization model) — both download
+  # from Hugging Face on first real use, not at image build time. Without
+  # a persistent volume here, every `docker compose up --build` (i.e.
+  # every deploy) would silently re-download several hundred MB to a few
+  # GB on the very next scan.
+  toolmint_model_cache:
+    name: toolmint_model_cache
 
 services:
   postgres:
@@ -124,6 +132,20 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
+      # AI Repetitive Voice Remover. HUGGINGFACE_TOKEN is required for
+      # speaker diarization (pyannote's models are gated on Hugging Face —
+      # accept both pyannote/speaker-diarization-3.1's and
+      # pyannote/segmentation-3.0's terms with the same account the token
+      # belongs to, or diarization silently degrades to "speaker unknown"
+      # instead of failing scans). Whisper transcription needs no token
+      # (public model). Both caches point at the same persistent volume
+      # so model weights survive across deploys.
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN}
+      TRANSFORMERS_CACHE_DIR: /app/.cache/transformers
+      HF_HOME: /app/.cache/huggingface
+      DIARIZATION_PYTHON_BIN: /app/apps/api/python/.venv/bin/python3
+    volumes:
+      - toolmint_model_cache:/app/.cache
     ports:
       - "127.0.0.1:4100:4000"
 

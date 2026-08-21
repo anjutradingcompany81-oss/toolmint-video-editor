@@ -1,0 +1,8 @@
+# Speaker diarization sidecar (apps/api/python/diarize.py) — installed
+# only in the API's Docker image, invoked via child_process, never as a
+# persistent service. CPU-only torch build (no CUDA) since this VPS has
+# no GPU; pinned versions kept deliberately loose (>=) since this is a
+# small, isolated dependency set with low breakage risk, not the app's
+# core stack.
+torch>=2.2
+pyannote.audio>=3.1

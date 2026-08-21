@@ -6,12 +6,12 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { Job, Worker } from "bullmq";
 import type Redis from "ioredis";
 import ffmpegPath from "ffmpeg-static";
-import { ExportStatus } from "@prisma/client";
+import { ExportStatus, type MediaAsset } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
-import { compositionSchema } from "../projects/composition.schema";
+import { compositionSchema, type Clip, type Track } from "../projects/composition.schema";
 import { RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.constants";
-import { buildMergeArgs, computeDimensions, playableDurationMs, type ClipSegment, type Resolution } from "./merge-ffmpeg.util";
+import { buildMultitrackMergeArgs, computeDimensions, type AudioClipSegment, type Resolution, type VisualClipSegment } from "./merge-ffmpeg.util";
 
 // How often the worker checks whether the user clicked Cancel while ffmpeg
 // is running — not instant, but bounded, and cheap enough not to matter at
@@ -52,45 +52,119 @@ export class RenderProcessor implements OnModuleDestroy {
       if (!version) throw new Error("Project has no saved timeline");
 
       const timeline = compositionSchema.parse(version.composition);
-      if (timeline.clips.length === 0) throw new Error("Add at least one clip to the timeline before exporting");
+      const trackById = new Map(timeline.tracks.map((t) => [t.id, t]));
+
+      const videoClips = timeline.clips.filter(
+        (c): c is Extract<Clip, { kind: "video" }> => c.kind === "video" && !trackById.get(c.trackId)?.hidden,
+      );
+      if (videoClips.length === 0) throw new Error("Add at least one video clip to the timeline before exporting");
 
       await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 15);
 
-      const mediaAssetIds = timeline.clips.map((c) => c.mediaAssetId);
-      const assets = await this.prisma.mediaAsset.findMany({ where: { id: { in: mediaAssetIds } } });
+      // Download every unique source once, however many clips (across
+      // however many tracks) end up referencing it.
+      const mediaBackedClips = timeline.clips.filter(
+        (c): c is Extract<Clip, { kind: "video" | "audio" | "overlay" }> => c.kind !== "text",
+      );
+      const uniqueAssetIds = Array.from(new Set(mediaBackedClips.map((c) => c.mediaAssetId)));
+      const assets = await this.prisma.mediaAsset.findMany({ where: { id: { in: uniqueAssetIds } } });
       const assetById = new Map(assets.map((a) => [a.id, a]));
 
-      const segments: ClipSegment[] = [];
-      for (const [index, clip] of timeline.clips.entries()) {
-        const asset = assetById.get(clip.mediaAssetId);
-        if (!asset) throw new Error(`A clip references media that no longer exists`);
+      const localPathById = new Map<string, string>();
+      for (const [index, assetId] of uniqueAssetIds.entries()) {
+        const asset = assetById.get(assetId);
+        if (!asset) throw new Error("A clip references media that no longer exists");
         if (asset.durationMs == null) throw new Error(`"${asset.originalName}" couldn't be measured — try re-uploading it`);
 
-        const localPath = join(workDir, `clip${index}${extname(asset.storageKey) || ".bin"}`);
+        const localPath = join(workDir, `asset${index}${extname(asset.storageKey) || ".bin"}`);
         await this.storage.downloadToFile(asset.storageKey, localPath);
-        segments.push({
-          localPath,
-          trimInMs: clip.trimInMs,
-          trimOutMs: clip.trimOutMs,
-          sourceDurationMs: asset.durationMs,
-          hasAudio: asset.hasAudio,
-          volume: clip.volume,
-          muted: clip.muted,
-        });
+        localPathById.set(assetId, localPath);
 
         if (await this.isCancelled(exportJob.id)) return this.markCancelled(exportJob.id);
-        await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 15 + Math.round((25 * (index + 1)) / timeline.clips.length));
+        await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 15 + Math.round((25 * (index + 1)) / uniqueAssetIds.length));
       }
 
-      const firstAsset = assetById.get(timeline.clips[0].mediaAssetId)!;
-      const project = await this.prisma.project.findUniqueOrThrow({ where: { id: exportJob.projectId } });
-      const { width, height } = computeDimensions(exportJob.resolution as Resolution, firstAsset.width ?? 1280, firstAsset.height ?? 720);
+      const assetOf = (clip: Extract<Clip, { kind: "video" | "audio" | "overlay" }>): MediaAsset => {
+        const asset = assetById.get(clip.mediaAssetId);
+        if (!asset) throw new Error("A clip references media that no longer exists");
+        return asset;
+      };
 
+      const visualClips: VisualClipSegment[] = timeline.clips
+        .filter((c): c is Extract<Clip, { kind: "video" | "overlay" }> => c.kind === "video" || c.kind === "overlay")
+        .filter((c) => !trackById.get(c.trackId)?.hidden)
+        .map((clip) => {
+          const asset = assetOf(clip);
+          const track = trackById.get(clip.trackId) as Track;
+          return {
+            localPath: localPathById.get(clip.mediaAssetId)!,
+            kind: clip.kind,
+            trackOrder: track.order,
+            startMs: clip.startMs,
+            durationMs: clip.durationMs,
+            trimInMs: clip.trimInMs,
+            sourceWidth: asset.width ?? 0,
+            sourceHeight: asset.height ?? 0,
+            transform: clip.transform,
+          };
+        });
+
+      // A track contributes audio if no track is soloed, or it is itself
+      // one of the soloed tracks — standard NLE solo semantics, applied
+      // only to audio-bearing kinds ("video" clips carry their own
+      // embedded audio; "overlay"/"text" never do).
+      const audioBearingTracks = timeline.tracks.filter((t) => t.kind === "video" || t.kind === "audio");
+      const anySolo = audioBearingTracks.some((t) => t.solo);
+      const trackAllowsAudio = (track: Track) => (anySolo ? track.solo : !track.muted);
+
+      const audioClips: AudioClipSegment[] = timeline.clips
+        .filter((c): c is Extract<Clip, { kind: "video" | "audio" }> => c.kind === "video" || c.kind === "audio")
+        .filter((c) => !c.muted)
+        .filter((c) => {
+          const track = trackById.get(c.trackId);
+          return track ? trackAllowsAudio(track) : false;
+        })
+        .map((clip) => {
+          const asset = assetOf(clip);
+          return {
+            localPath: localPathById.get(clip.mediaAssetId)!,
+            startMs: clip.startMs,
+            durationMs: clip.durationMs,
+            trimInMs: clip.trimInMs,
+            sourceDurationMs: asset.durationMs!,
+            hasAudio: asset.hasAudio,
+            volume: clip.volume,
+            audioPatches: clip.audioPatches,
+          };
+        })
+        .filter((segment) => segment.hasAudio);
+
+      // The base clip that decides the canvas's own aspect ratio: the
+      // "video" kind clip on the lowest (bottom-most) track order, and the
+      // earliest of those if several share that track.
+      const baseClip = [...videoClips].sort((a, b) => {
+        const orderDiff = (trackById.get(a.trackId)?.order ?? 0) - (trackById.get(b.trackId)?.order ?? 0);
+        return orderDiff !== 0 ? orderDiff : a.startMs - b.startMs;
+      })[0];
+      const baseAsset = assetOf(baseClip);
+
+      const project = await this.prisma.project.findUniqueOrThrow({ where: { id: exportJob.projectId } });
+      const { width, height } = computeDimensions(exportJob.resolution as Resolution, baseAsset.width ?? 1280, baseAsset.height ?? 720);
+
+      const totalDurationMs = Math.max(...timeline.clips.map((c) => c.startMs + c.durationMs), 0);
       const outputPath = join(workDir, "output.mp4");
-      const args = buildMergeArgs({ clips: segments, width, height, fps: project.fps, quality: exportJob.quality, outputPath });
+      const args = buildMultitrackMergeArgs({
+        visualClips,
+        audioClips,
+        width,
+        height,
+        fps: project.fps,
+        totalDurationMs,
+        quality: exportJob.quality,
+        outputPath,
+      });
 
       await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 45);
-      const totalDurationMs = segments.reduce((sum, s) => sum + playableDurationMs(s), 0);
       const cancelled = await this.runFfmpeg(
         args,
         totalDurationMs,

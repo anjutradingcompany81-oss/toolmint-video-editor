@@ -5,12 +5,32 @@ on a single timeline, and export one merged MP4. Ships at `toolmint.co.in`
 (the app itself is branded ProCut; the domain/hosting predates the rebrand
 and was deliberately left in place — see "The ProCut rebuild" below).
 
-**Status: feature-complete for its stated scope.** Upload, drag-reorder,
-trim (drag handles or numeric fields), split-at-playhead, delete, undo/redo,
-autosave with refresh-safe restore, a continuous sequential preview player,
-and export (resolution/quality presets, progress, cancel, download) are all
-built and verified end to end against live Postgres/Redis/MinIO, including
-on the deployed production stack.
+**Status: feature-complete for its original single-track scope, now on a
+multitrack-capable data model and render pipeline (Phase 1 of an ongoing
+upgrade — see "Timeline data model" below).** Upload, drag-reorder, trim
+(drag handles or numeric fields), split-at-playhead, cut-unwanted-middle-
+portion (mark in/out, razor tool, ripple delete, keyboard shortcuts),
+delete, undo/redo, autosave with refresh-safe restore, a continuous
+sequential preview player, and export (resolution/quality presets,
+progress, cancel, download) are all built and verified end to end against
+live Postgres/Redis/MinIO, including on the deployed production stack.
+
+**Timeline data model — v1 vs. v2.** The composition schema was rebuilt
+from a flat, position-less `Clip[]` (array order = timeline order, one
+implicit track) into `Track[]` + `Clip[]` with absolute positions
+(`startMs`/`durationMs` per clip) — the standard multitrack NLE model,
+needed to eventually support separate video/audio/text/overlay tracks. The
+FFmpeg render pipeline (`apps/api/src/render/merge-ffmpeg.util.ts`) now
+composites tracks via `overlay`/`amix` filter chains instead of a single
+`concat`. **The editor UI is intentionally still single-track for this
+phase** — `apps/web/src/lib/use-composition-editor.ts` is the seam that
+keeps the real v2 timeline as source of truth while exposing one video
+track's clips as a flat array to the existing (unchanged) UI, so nothing
+about the day-to-day editing experience changed in this phase. A real
+multitrack UI (tracks panel, per-track editing, audio/text/overlay tracks)
+is scoped for a later phase. Existing projects were migrated from v1 to v2
+via `apps/api/scripts/migrate-timeline-v2.ts` (one-time, idempotent — see
+its header comment).
 
 ## The ProCut rebuild
 
@@ -201,7 +221,8 @@ apps/
 | `npm run build` | Build both apps |
 | `npm run lint` | Lint both apps |
 | `npm run typecheck` | Type-check both apps |
-| `npm run test` | Run tests (API only — 84 tests across 8 suites) |
+| `npm run test` | Run tests (API + web) |
+| `npm run migrate:timeline-v2 --workspace apps/api` | One-time v1->v2 composition data migration (dry run by default; `-- --apply` to write) |
 | `npm run prisma:generate` | Regenerate the Prisma client after a schema change |
 | `npm run prisma:migrate` | Create/apply a migration in dev |
 
@@ -213,10 +234,18 @@ auth-support tables (refresh tokens, password reset, email verification).
 
 The timeline is never stored as separate rows per clip — it's a single
 Zod-validated JSON document on `ProjectVersion.composition`
-(`apps/api/src/projects/composition.schema.ts`): `{ schemaVersion, clips:
-[{ id, mediaAssetId, trimInMs, trimOutMs, volume, muted }], updatedAt }`.
-Array order is timeline order; no separate ordering/position field to keep
-in sync.
+(`apps/api/src/projects/composition.schema.ts`), schema v2: `{
+schemaVersion: "2.0", tracks: [{ id, kind, name, order, locked, hidden,
+muted, solo }], clips: [{ id, trackId, kind, startMs, durationMs, ... }],
+updatedAt }`. Clip `kind` is one of `video`/`audio`/`overlay` (media clips
+— `mediaAssetId`, trims, volume, mute, speed, transform) or `text` (no
+media, just content/font/color/transform); each clip's `kind` must match
+its track's `kind`, and clips on the same track may not overlap in time —
+both enforced by a `superRefine` cross-field check, not just per-field
+validation. Position is explicit (`startMs`/`durationMs`), not implied by
+array order, so every mutation re-packs the affected track back-to-back
+with no gaps (`repackTrack` in `composition-api.ts` / `withClips` in
+`use-composition-editor.ts`).
 
 ## Environment variables
 
@@ -310,14 +339,19 @@ Architecture: `POST` creates an `ExportJob` row and enqueues it on a
 BullMQ queue backed by Redis; only one export can be active per project at
 a time (a second request is rejected, not silently queued behind the
 first, so the UI never looks like it's doing nothing). An in-process
-worker (`RenderProcessor`) downloads each clip's source from object
-storage, builds a single FFmpeg `filter_complex` graph
-(`merge-ffmpeg.util.ts`) that trims each clip to its playable span, scales
-and pads every clip to the first clip's own aspect ratio (letterboxed, not
-stretched), and concatenates with a single interleaved
-`concat=n=N:v=1:a=1` filter — no transitions, no per-clip effects, matching
-the "hard cuts only" scope. Quality presets map to CRF/audio-bitrate pairs
-(`STANDARD`: crf 23/128k, `HIGH`: crf 20/192k, `MAXIMUM`: crf 16/256k).
+worker (`RenderProcessor`) downloads each unique media asset referenced by
+the timeline exactly once, then builds a single FFmpeg `filter_complex`
+graph (`merge-ffmpeg.util.ts`) that composites tracks rather than
+concatenating a flat list: a base black/silent canvas sized from the
+lowest-order video-kind clip, each visual clip (`video`/`overlay` kind)
+time-shifted and layered onto it via `overlay` (ascending track order,
+gated to its own `[startMs, startMs+durationMs)` window, opacity via
+`colorchannelmixer`), and every audio-producing clip (respecting
+mute/solo/hidden-track state) time-shifted and mixed via `amix`. `video`-
+kind clips fit the canvas; `overlay`-kind clips render at their own
+natural size (so a future logo/overlay isn't stretched to fill the frame).
+Quality presets map to CRF/audio-bitrate pairs (`STANDARD`: crf 23/128k,
+`HIGH`: crf 20/192k, `MAXIMUM`: crf 16/256k).
 Cancellation is real, not cosmetic: the worker polls the job's
 `cancelRequested` flag once a second while ffmpeg runs and sends `SIGTERM`
 if it's set — verified live with a 25-second 1080p source, cancelling
@@ -362,29 +396,40 @@ any common player.
 
 ## Testing
 
-Backend: 84 tests across 8 suites (`npm run test --workspace apps/api`),
-covering the merge/trim/split FFmpeg command builder in isolation (no real
-ffmpeg process — pure function tests on the generated argument list), plus
-service-level tests for auth, projects, media (including duplicate-upload
-rejection and the video-only file-type restriction), composition
-validation, and the export service (including the single-active-export
-guard and cancel flow).
+Backend: `npm run test --workspace apps/api` — covers the multitrack merge
+filter-graph builder in isolation (no real ffmpeg process — pure function
+tests on the generated argument list: base canvas/silence, track-order
+compositing, time-window gating, video-vs-overlay scale targets, opacity,
+audio mixing), the v2 composition schema (track/clip-kind matching, same-
+track overlap rejection, cross-track overlap allowed), plus service-level
+tests for auth, projects, media (duplicate-upload rejection, video-only
+file-type restriction), and the export service (single-active-export
+guard, cancel flow).
 
-No automated frontend test suite yet — verified instead by driving the
-actual browser against real infra (both local dev and, after deploy, the
-live production stack): registration/login/guest-login, project creation,
-upload, add-to-timeline, playback across clip boundaries, trim (drag
-handles and numeric fields), split, drag-to-reorder, delete, undo/redo,
-every keyboard shortcut (via real trusted key events, not synthetic
-`dispatchEvent` — browser autoplay policy blocks `.play()` from untrusted
-synthetic events, which surfaced as a useful reminder while verifying
-Space-to-play), export with live progress, cancel-mid-render, and a
-refresh-mid-edit restore. Two real bugs were found and fixed this way: an
-export-cancel request that updated the database flag but never actually
-signaled the running ffmpeg process, and a keyboard-shortcut guard that
-was too broad (blocking Space/S/Delete/etc. whenever *any* `<input>` —
-including the playhead scrubber and volume slider — held focus, not just
-genuine text-entry fields).
+Frontend: `npm run test --workspace apps/web` (Vitest) — pure-function
+tests for the v2 timeline helpers in `composition-api.ts` (`repackTrack`,
+`splitClip`, `removeRangeOnTrack`/cut-unwanted-middle-portion, including
+multi-track isolation: edits on one track never touch clips on another).
+
+Both are supplemented by driving the actual browser against real infra
+(local dev and, after each deploy, the live production stack):
+registration/login/guest-login, project creation, upload, add-to-timeline,
+playback across clip boundaries, trim, split, mark-in/out cut, razor tool,
+drag-to-reorder, delete, undo/redo, every keyboard shortcut (via real
+trusted key events, not synthetic `dispatchEvent`), export with live
+progress, cancel-mid-render, and a refresh-mid-edit restore — plus, for
+the v2 rebuild specifically, exporting a 3-track project (base video +
+opacity-blended overlay + separate audio track) and verifying the output
+via `ffprobe` and pixel-level color sampling against the hand-calculated
+expected blend. Real bugs found and fixed this way (across both rebuilds):
+an export-cancel request that updated the database flag but never
+actually signaled the running ffmpeg process; a keyboard-shortcut guard
+that was too broad (blocking Space/S/Delete/etc. whenever *any* `<input>`
+— including the playhead scrubber and volume slider — held focus, not
+just genuine text-entry fields); and, pre-testing, a reorder function that
+only spliced array order without updating any position field, which would
+have silently persisted stale clip positions under the new position-
+explicit v2 model.
 
 ## Deploying to production
 

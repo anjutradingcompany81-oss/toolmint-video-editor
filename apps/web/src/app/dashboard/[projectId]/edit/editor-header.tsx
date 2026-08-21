@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { useClickOutside } from "@/lib/use-click-outside";
-import { ExportIcon, RedoIcon, SignOutIcon, UndoIcon } from "@/components/icons";
+import { ExportIcon, MicWaveIcon, RedoIcon, SignOutIcon, UndoIcon } from "@/components/icons";
 import SaveIndicator from "@/components/save-indicator";
 import type { SaveStatus } from "@/lib/use-composition-editor";
 
@@ -18,9 +18,23 @@ interface EditorHeaderProps {
   onRedo: () => void;
   onExport: () => void;
   exportDisabled: boolean;
+  onToggleVoiceCorrection: () => void;
+  voiceCorrectionOpen: boolean;
 }
 
-export default function EditorHeader({ title, saveStatus, saveError, canUndo, canRedo, onUndo, onRedo, onExport, exportDisabled }: EditorHeaderProps) {
+export default function EditorHeader({
+  title,
+  saveStatus,
+  saveError,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onExport,
+  exportDisabled,
+  onToggleVoiceCorrection,
+  voiceCorrectionOpen,
+}: EditorHeaderProps) {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useClickOutside<HTMLDivElement>(menuOpen, () => setMenuOpen(false));
@@ -61,6 +75,17 @@ export default function EditorHeader({ title, saveStatus, saveError, canUndo, ca
       <SaveIndicator status={saveStatus} error={saveError} />
 
       <div className="ml-auto flex items-center gap-3">
+        <button
+          onClick={onToggleVoiceCorrection}
+          aria-pressed={voiceCorrectionOpen}
+          title="AI Voice Correction — detect and fix accidentally repeated speech"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+            voiceCorrectionOpen ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          <MicWaveIcon width={14} height={14} /> AI Voice Correction
+        </button>
+
         <button
           onClick={onExport}
           disabled={exportDisabled}

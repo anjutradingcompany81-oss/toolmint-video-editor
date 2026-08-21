@@ -166,3 +166,12 @@ export function ExportIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function MicWaveIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base(props)}>
+      <rect x="8" y="3" width="4" height="8" rx="2" />
+      <path d="M5.5 9.5a4.5 4.5 0 0 0 9 0M10 14v3M7.5 17h5" />
+    </svg>
+  );
+}
