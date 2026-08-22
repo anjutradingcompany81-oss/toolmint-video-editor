@@ -2,7 +2,7 @@
 
 import type { ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { MIN_CLIP_DURATION_MS } from "@/lib/composition-api";
-import { TrashIcon } from "@/components/icons";
+import { CopyIcon, TrashIcon } from "@/components/icons";
 import { formatResolution, formatTimecode } from "./format";
 
 interface PropertiesPanelProps {
@@ -12,11 +12,22 @@ interface PropertiesPanelProps {
   onSetMuted: (muted: boolean) => void;
   onReset: () => void;
   onDelete: () => void;
+  onRippleDelete: () => void;
+  onDuplicate: () => void;
 }
 
 const inputClass = "w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-brand";
 
-export default function PropertiesPanel({ entry, onSetTrim, onSetVolume, onSetMuted, onReset, onDelete }: PropertiesPanelProps) {
+export default function PropertiesPanel({
+  entry,
+  onSetTrim,
+  onSetVolume,
+  onSetMuted,
+  onReset,
+  onDelete,
+  onRippleDelete,
+  onDuplicate,
+}: PropertiesPanelProps) {
   if (!entry) {
     return (
       <aside className="flex w-72 shrink-0 flex-col border-l border-line bg-surface-2 p-4">
@@ -122,10 +133,25 @@ export default function PropertiesPanel({ entry, onSetTrim, onSetVolume, onSetMu
           Reset edits
         </button>
         <button
+          onClick={onDuplicate}
+          title="Duplicate this clip (Ctrl+D)"
+          className="flex items-center justify-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm text-ink hover:border-brand"
+        >
+          <CopyIcon width={14} height={14} /> Duplicate clip
+        </button>
+        <button
           onClick={onDelete}
+          title="Delete this clip, leaving a gap (Delete)"
           className="flex items-center justify-center gap-1.5 rounded-md border border-danger/40 px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
         >
           <TrashIcon width={14} height={14} /> Delete clip
+        </button>
+        <button
+          onClick={onRippleDelete}
+          title="Delete this clip and pull later clips back to close the gap (Shift+Delete)"
+          className="flex items-center justify-center gap-1.5 rounded-md border border-danger/40 px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
+        >
+          <TrashIcon width={14} height={14} /> Ripple delete
         </button>
       </div>
     </aside>

@@ -223,6 +223,98 @@ export function moveClip(clips: Clip[], clipId: string, candidateStartMs: number
   return clips.map((c) => (c.id === clipId ? { ...c, startMs } : c));
 }
 
+// Applies new trim offsets to one clip and — critically — recomputes the
+// timeline geometry that follows from them. The previous implementation
+// only wrote trimInMs/trimOutMs and left durationMs untouched, so trimming
+// visibly did nothing: the block kept its old width, the playhead math kept
+// its old length, and the renderer emitted `trim=start=<trimIn>:duration=
+// <stale durationMs>`, reading past the end of the source.
+//
+// Edge semantics match every mainstream editor: dragging the START handle
+// moves the clip's left edge along the timeline (its right edge stays put),
+// dragging the END handle only shortens it. Both are clamped against the
+// neighbours on the same track so a trim can never create the overlap the
+// backend schema rejects.
+export function trimClipOnTrack(
+  clips: Clip[],
+  clipId: string,
+  sourceDurationMs: number,
+  requestedTrimInMs: number,
+  requestedTrimOutMs: number,
+): Clip[] {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip || clip.kind === "text" || sourceDurationMs <= 0) return clips;
+
+  let trimInMs = Math.max(0, Math.round(requestedTrimInMs));
+  let trimOutMs = Math.max(0, Math.round(requestedTrimOutMs));
+  // Never let the two trims eat more than the source has to give.
+  if (sourceDurationMs - trimInMs - trimOutMs < MIN_CLIP_DURATION_MS) {
+    trimOutMs = Math.max(0, sourceDurationMs - trimInMs - MIN_CLIP_DURATION_MS);
+    trimInMs = Math.min(trimInMs, Math.max(0, sourceDurationMs - trimOutMs - MIN_CLIP_DURATION_MS));
+  }
+
+  const others = clips.filter((c) => c.trackId === clip.trackId && c.id !== clipId);
+  const clipEndMs = clip.startMs + clip.durationMs;
+  const prevEndMs = others.reduce((max, o) => (o.startMs + o.durationMs <= clip.startMs ? Math.max(max, o.startMs + o.durationMs) : max), 0);
+  const nextStartMs = others.reduce((min, o) => (o.startMs >= clipEndMs ? Math.min(min, o.startMs) : min), Number.POSITIVE_INFINITY);
+
+  // Start edge: shifting trimIn by N shifts the clip's timeline start by N.
+  let startMs = clip.startMs + (trimInMs - clip.trimInMs);
+  const floorMs = Math.max(0, prevEndMs);
+  if (startMs < floorMs) {
+    // Can't extend left into the previous clip (or before zero) — give back
+    // exactly as much trim as the available room allows.
+    trimInMs += floorMs - startMs;
+    startMs = floorMs;
+  }
+
+  let durationMs = Math.max(MIN_CLIP_DURATION_MS, sourceDurationMs - trimInMs - trimOutMs);
+  if (startMs + durationMs > nextStartMs) {
+    durationMs = Math.max(MIN_CLIP_DURATION_MS, nextStartMs - startMs);
+    trimOutMs = Math.max(0, sourceDurationMs - trimInMs - durationMs);
+  }
+
+  // Patches live in clip-local coordinates, so a trim that moves local zero
+  // has to move them with it or a correction silently drifts onto the wrong
+  // words. The kept window, expressed in the clip's OLD local space:
+  const windowStartMs = trimInMs - clip.trimInMs;
+  return clips.map((c) =>
+    c.id === clipId && c.kind !== "text"
+      ? { ...c, trimInMs, trimOutMs, startMs, durationMs, audioPatches: remapAudioPatches(c.audioPatches, windowStartMs, windowStartMs + durationMs) }
+      : c,
+  );
+}
+
+// Closes the gap left behind after removing `removedClipId`, by pulling
+// every later clip on that track back by exactly the removed clip's span —
+// the "ripple delete" every editor offers alongside a plain delete. Kept
+// distinct from repackTrack, which flattens *all* spacing on the track:
+// rippling one deletion must not also silently swallow gaps the user
+// deliberately created elsewhere.
+export function rippleDeleteClip(clips: Clip[], clipId: string): Clip[] {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip) return clips;
+  const removedEndMs = clip.startMs + clip.durationMs;
+  return clips
+    .filter((c) => c.id !== clipId)
+    .map((c) => (c.trackId === clip.trackId && c.startMs >= removedEndMs ? { ...c, startMs: Math.max(0, c.startMs - clip.durationMs) } : c));
+}
+
+// Places a copy of `clipId` in the first gap large enough to hold it at or
+// after the original's end, so duplicating never overlaps and never
+// silently lands somewhere the user can't see.
+export function duplicateClip(clips: Clip[], clipId: string): Clip[] {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip) return clips;
+  const others = clips.filter((c) => c.trackId === clip.trackId).map((c) => ({ startMs: c.startMs, durationMs: c.durationMs }));
+  const startMs = clampMoveStartMs(others, clip.durationMs, clip.startMs + clip.durationMs);
+  const copy: Clip =
+    clip.kind === "text"
+      ? { ...clip, id: randomId("clip"), startMs }
+      : { ...clip, id: randomId("clip"), startMs, audioPatches: clip.audioPatches.map((p) => ({ ...p, id: randomId("patch") })) };
+  return [...clips, copy];
+}
+
 export function newVideoTrack(name: string, order: number): Track {
   return { id: randomId("track"), kind: "video", name, order, locked: false, hidden: false, muted: false, solo: false };
 }

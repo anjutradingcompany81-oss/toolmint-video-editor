@@ -20,11 +20,18 @@ const EPSILON_MS = 30;
 // backend); this preview player intentionally hasn't grown that same
 // real-time compositing yet, since the editor UI itself is still
 // single-track for this phase.
+export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
 export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: number) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(false);
+  const [playbackRate, setPlaybackRateState] = useState(1);
+  // Kept in a ref as well so loadEntry can re-apply it after switching
+  // source files — assigning `.src` resets playbackRate to 1, which would
+  // otherwise silently drop the chosen speed at every clip boundary.
+  const playbackRateRef = useRef(1);
   const activeIndexRef = useRef(-1);
   const pendingSeekRef = useRef(false);
   const layoutRef = useRef(layout);
@@ -46,7 +53,17 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
 
   const applyClipAV = useCallback((video: HTMLVideoElement, clip: MediaClip) => {
     video.muted = clip.muted;
-    video.volume = clip.muted ? 0 : clip.volume;
+    // The <video> element clamps volume to [0,1]; clip volume goes to 2 for
+    // boosting, which the export pipeline honors via ffmpeg's volume filter.
+    // Clamp here rather than letting the assignment throw.
+    video.volume = clip.muted ? 0 : Math.min(1, Math.max(0, clip.volume));
+    video.playbackRate = playbackRateRef.current;
+  }, []);
+
+  const setPlaybackRate = useCallback((rate: number) => {
+    playbackRateRef.current = rate;
+    setPlaybackRateState(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
   }, []);
 
   // Loads (if needed) and seeks the underlying <video> element to the point
@@ -69,6 +86,9 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
 
         const onReady = () => {
           video.currentTime = targetSrcSeconds;
+          // Assigning .src resets playbackRate to 1 — restore the user's
+          // chosen speed, or it silently snaps back at every clip boundary.
+          video.playbackRate = playbackRateRef.current;
           pendingSeekRef.current = false;
           setBuffering(false);
           if (autoplay) video.play().catch(() => setPlaying(false));
@@ -208,13 +228,24 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
+  // "Stop" in the editor sense: halt playback AND return to the start,
+  // as distinct from Pause which holds position.
+  const stop = useCallback(() => {
+    setPlaying(false);
+    videoRef.current?.pause();
+    seekTo(0);
+  }, [seekTo]);
+
   return {
     videoRef,
     playheadMs,
     playing,
     buffering,
+    playbackRate,
+    setPlaybackRate,
     play,
     pause,
+    stop,
     togglePlay,
     seekTo,
     stepFrame,

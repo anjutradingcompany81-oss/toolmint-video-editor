@@ -4,7 +4,7 @@ import { useMemo, useRef } from "react";
 import type { ClipLayoutEntry } from "@/lib/use-timeline-player";
 import TimelineClipBlock from "./timeline-clip-block";
 import { formatTimecode } from "./format";
-import { PlusIcon, ScissorsIcon, TrashIcon } from "@/components/icons";
+import { CopyIcon, PlusIcon, ScissorsIcon, TrashIcon } from "@/components/icons";
 
 function ZoomInIcon() {
   return (
@@ -38,6 +38,17 @@ function MarkOutIcon() {
     </svg>
   );
 }
+// Trash can with a left-pointing arrow — "remove, and pull what follows
+// back into the space" — to distinguish it at a glance from plain Delete.
+function RippleDeleteIcon() {
+  return (
+    <svg width={12} height={12} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 5.5h8M5.5 5.5V4a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4.5 5.5l.6 9a1 1 0 0 0 1 .9h1.8a1 1 0 0 0 1-.9l.6-9" />
+      <path d="M18 10h-5M15 7.5L12.5 10l2.5 2.5" />
+    </svg>
+  );
+}
+
 function RazorIcon() {
   return (
     <svg width={14} height={14} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
@@ -66,6 +77,8 @@ interface TimelinePanelProps {
   onMoveClip: (clipId: string, candidateStartMs: number) => void;
   onSplit: () => void;
   onDeleteSelected: () => void;
+  onRippleDeleteSelected: () => void;
+  onDuplicateSelected: () => void;
   splitDisabled: boolean;
   markInMs: number | null;
   markOutMs: number | null;
@@ -179,6 +192,8 @@ export default function TimelinePanel({
   onMoveClip,
   onSplit,
   onDeleteSelected,
+  onRippleDeleteSelected,
+  onDuplicateSelected,
   splitDisabled,
   markInMs,
   markOutMs,
@@ -321,12 +336,30 @@ export default function TimelinePanel({
         </button>
 
         <button
+          onClick={onDuplicateSelected}
+          disabled={!selectedClipId}
+          title="Duplicate selected clip (Ctrl+D)"
+          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-ink hover:border-brand disabled:opacity-30"
+        >
+          <CopyIcon width={12} height={12} /> Duplicate
+        </button>
+
+        <button
           onClick={onDeleteSelected}
           disabled={!selectedClipId}
-          title="Delete selected clip (Delete)"
+          title="Delete selected clip, leaving a gap (Delete)"
           className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-danger hover:border-danger disabled:opacity-30 disabled:text-ink-muted"
         >
           <TrashIcon width={12} height={12} /> Delete clip
+        </button>
+
+        <button
+          onClick={onRippleDeleteSelected}
+          disabled={!selectedClipId}
+          title="Delete selected clip and close the gap (Shift+Delete)"
+          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-danger hover:border-danger disabled:opacity-30 disabled:text-ink-muted"
+        >
+          <RippleDeleteIcon /> Ripple Delete
         </button>
 
         {hasMarkedRange && (

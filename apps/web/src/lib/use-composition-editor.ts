@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "./api-client";
 import { getProject, type Project } from "./projects-api";
-import { getComposition, saveComposition, repackTrack, newVideoTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
+import { getComposition, saveComposition, newVideoTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
 
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
 
@@ -16,15 +16,13 @@ const SAVE_DEBOUNCE_MS = 1500;
 const HISTORY_COALESCE_MS = 500;
 const HISTORY_LIMIT = 100;
 
-// The editor UI (page.tsx and everything under it) only knows about "the"
-// timeline as a single flat, ordered list of video clips — it predates the
-// v2 multitrack rebuild and hasn't been rebuilt into a real multitrack UI
-// yet (that's a later phase). This hook is the seam: it keeps the *real*
-// v2 Timeline (Track[] + Clip[], absolute positions) as the source of
-// truth, but exposes just one track's clips as a plain ordered array, and
-// re-derives that track's absolute positions from array order on every
-// edit — so from the UI's point of view nothing changed, while what's
-// actually persisted (and rendered) is genuine v2 data.
+// The editor UI (page.tsx and everything under it) works on a single video
+// track — it predates the v2 multitrack rebuild and hasn't grown a real
+// multitrack UI yet (that's a later phase). This hook is the seam: it keeps
+// the *real* v2 Timeline (Track[] + Clip[], absolute positions) as the
+// source of truth and exposes just that one track's clips, sorted by their
+// own startMs. Positions are genuine absolute values owned by each edit
+// operation — this hook no longer rewrites them (see withClips).
 //
 // Any other tracks/clips already in the timeline (e.g. created directly
 // via the API, as multitrack features land server-side ahead of their UI)
@@ -144,10 +142,22 @@ export function useCompositionEditor(projectId: string) {
     if (!timelineRef.current || !currentTrackId) return;
     const prevClips = clipsRef.current;
     const mutated = mutate(prevClips);
+    // Deliberately NOT repacked. This used to run repackTrack() on every
+    // single edit, which forces the whole track back-to-back with no gaps —
+    // silently destroying any deliberate spacing the moment it was created,
+    // so dragging a clip to a new position appeared to do nothing at all.
+    // Clips carry absolute positions (schema v2) and the backend permits
+    // gaps (only same-track *overlap* is rejected), so position is now
+    // owned by whichever operation is being performed: moveClip and
+    // trimClipOnTrack clamp against neighbours themselves, splitClip and
+    // duplicateClip compute explicit positions, and the two operations that
+    // genuinely mean "close the gap" — rippleDeleteClip and
+    // removeRangeOnTrack — do their own rippling internally.
+    //
     // The mutator only ever hands back clips for this one track, so this
     // narrowing is safe — it exists to satisfy the Clip union type without
     // scattering `as MediaClip` casts through every call site below.
-    const repacked = repackTrack(mutated, currentTrackId).filter((c): c is MediaClip => c.trackId === currentTrackId && c.kind !== "text");
+    const nextClips = mutated.filter((c): c is MediaClip => c.trackId === currentTrackId && c.kind !== "text").sort((a, b) => a.startMs - b.startMs);
     const now = Date.now();
 
     if (now - lastEditAt.current > HISTORY_COALESCE_MS) {
@@ -158,8 +168,8 @@ export function useCompositionEditor(projectId: string) {
     lastEditAt.current = now;
     syncHistoryFlags();
 
-    setClips(repacked);
-    scheduleSave(repacked);
+    setClips(nextClips);
+    scheduleSave(nextClips);
   }
 
   function undo() {

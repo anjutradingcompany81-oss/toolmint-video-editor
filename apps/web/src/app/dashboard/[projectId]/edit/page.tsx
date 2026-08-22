@@ -6,7 +6,16 @@ import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
-import { newVideoClip, splitClip, removeRangeOnTrack, moveClip, type MediaClip } from "@/lib/composition-api";
+import {
+  newVideoClip,
+  splitClip,
+  removeRangeOnTrack,
+  moveClip,
+  trimClipOnTrack,
+  rippleDeleteClip,
+  duplicateClip,
+  type MediaClip,
+} from "@/lib/composition-api";
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
 import PreviewPanel from "./preview-panel";
@@ -144,11 +153,20 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips, trackId, mediaById],
   );
 
+  // Routed through trimClipOnTrack so the clip's durationMs (and, for a
+  // start-edge trim, its startMs) are actually recomputed — writing the
+  // trim offsets alone left the clip the same length on the timeline and
+  // in the export, which is why trimming looked like it did nothing.
   const trimClip = useCallback(
     (clipId: string, trimInMs: number, trimOutMs: number) => {
-      withClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, trimInMs, trimOutMs } : c)));
+      const sourceDurationMs = clips.find((c) => c.id === clipId) ? sourceDurationOfClip(clips.find((c) => c.id === clipId)!) : 0;
+      if (sourceDurationMs <= 0) {
+        setMessage({ text: "This clip's media is still processing — try again in a moment.", tone: "error" });
+        return;
+      }
+      withClips((prev) => trimClipOnTrack(prev, clipId, sourceDurationMs, trimInMs, trimOutMs));
     },
-    [withClips],
+    [withClips, clips, sourceDurationOfClip],
   );
 
   // Free timeline placement: moves one clip to an absolute position,
@@ -162,10 +180,33 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips],
   );
 
+  // Plain delete leaves the gap where the clip was (matching every
+  // mainstream editor, and now actually representable since positions are
+  // no longer repacked); ripple delete closes it by pulling later clips
+  // back. Both were previously the same operation because every edit was
+  // force-repacked.
   const deleteClip = useCallback(
     (clipId: string) => {
       withClips((prev) => prev.filter((c) => c.id !== clipId));
       setSelectedClipId((current) => (current === clipId ? null : current));
+      setMessage({ text: "Clip deleted. The gap is left in place — use Ripple Delete to close it.", tone: "success" });
+    },
+    [withClips],
+  );
+
+  const rippleDelete = useCallback(
+    (clipId: string) => {
+      withClips((prev) => rippleDeleteClip(prev, clipId));
+      setSelectedClipId((current) => (current === clipId ? null : current));
+      setMessage({ text: "Clip removed and the gap closed.", tone: "success" });
+    },
+    [withClips],
+  );
+
+  const duplicateSelected = useCallback(
+    (clipId: string) => {
+      withClips((prev) => duplicateClip(prev, clipId));
+      setMessage({ text: "Clip duplicated.", tone: "success" });
     },
     [withClips],
   );
@@ -184,11 +225,19 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips],
   );
 
+  // Clearing the trims has to go through the same geometry recompute as any
+  // other trim, or the clip keeps its trimmed length while claiming to be
+  // untrimmed.
   const resetClip = useCallback(
     (clipId: string) => {
-      withClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, trimInMs: 0, trimOutMs: 0, volume: 1, muted: false } : c)));
+      const clip = clips.find((c) => c.id === clipId);
+      const sourceDurationMs = clip ? sourceDurationOfClip(clip) : 0;
+      withClips((prev) => {
+        const restored = sourceDurationMs > 0 ? trimClipOnTrack(prev, clipId, sourceDurationMs, 0, 0) : prev;
+        return restored.map((c) => (c.id === clipId ? { ...c, volume: 1, muted: false } : c));
+      });
     },
-    [withClips],
+    [withClips, clips, sourceDurationOfClip],
   );
 
   // Shared by "Split at playhead" (S / the Split button) and razor-mode
@@ -296,19 +345,23 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     setMessage({ text: "Selected portion removed successfully. The original video remains unchanged.", tone: "success" });
   }, [markInMs, markOutMs, clips, trackId, sourceDurationOfClip, withClips, clearMarks, player]);
 
-  // Delete / Backspace / Shift+Delete: a marked range takes priority over
-  // a selected clip. Shift+Delete is offered as the familiar "ripple
-  // delete" shortcut from other editors, but is otherwise identical to
-  // plain Delete here — ripple is the only delete this timeline has.
-  const handleDeleteKey = useCallback(() => {
-    if (hasMarkedRange) {
-      cutSelection();
-    } else if (selectedClipId) {
-      deleteClip(selectedClipId);
-    } else {
-      setMessage({ text: "Select a clip, or mark a start and end point, before deleting.", tone: "error" });
-    }
-  }, [hasMarkedRange, cutSelection, selectedClipId, deleteClip]);
+  // Delete / Backspace leaves the gap; Shift+Delete ripples it closed.
+  // These are now genuinely different operations — before positions were
+  // preserved, both did the same thing because every edit was repacked.
+  // A marked range still takes priority over a selected clip.
+  const handleDeleteKey = useCallback(
+    (ripple: boolean) => {
+      if (hasMarkedRange) {
+        cutSelection();
+      } else if (selectedClipId) {
+        if (ripple) rippleDelete(selectedClipId);
+        else deleteClip(selectedClipId);
+      } else {
+        setMessage({ text: "Select a clip, or mark a start and end point, before deleting.", tone: "error" });
+      }
+    },
+    [hasMarkedRange, cutSelection, selectedClipId, deleteClip, rippleDelete],
+  );
 
   // Keyboard shortcuts — see spec: Space, S, I, O, Delete, Shift+Delete,
   // Ctrl/Cmd+Z, Ctrl/Cmd+Y, Ctrl/Cmd+Shift+Z, arrows, Ctrl/Cmd +/-.
@@ -330,7 +383,10 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         markOut();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        handleDeleteKey();
+        handleDeleteKey(e.shiftKey);
+      } else if (mod && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        if (selectedClipId) duplicateSelected(selectedClipId);
       } else if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -354,7 +410,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [player, splitAtPlayhead, markIn, markOut, handleDeleteKey, undo, redo, project?.fps]);
+  }, [player, splitAtPlayhead, markIn, markOut, handleDeleteKey, undo, redo, project?.fps, selectedClipId, duplicateSelected]);
 
   if (status !== "authenticated" || loading || !mediaLoaded) {
     return <main className="flex min-h-screen items-center justify-center bg-surface text-sm text-ink-muted">Loading…</main>;
@@ -434,6 +490,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             onMoveClip={moveClipHandler}
             onSplit={splitAtPlayhead}
             onDeleteSelected={() => selectedClipId && deleteClip(selectedClipId)}
+            onRippleDeleteSelected={() => selectedClipId && rippleDelete(selectedClipId)}
+            onDuplicateSelected={() => selectedClipId && duplicateSelected(selectedClipId)}
             splitDisabled={!canSplit}
             markInMs={markInMs}
             markOutMs={markOutMs}
@@ -457,6 +515,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onSetMuted={(muted) => selectedClipId && setClipMuted(selectedClipId, muted)}
           onReset={() => selectedClipId && resetClip(selectedClipId)}
           onDelete={() => selectedClipId && deleteClip(selectedClipId)}
+          onRippleDelete={() => selectedClipId && rippleDelete(selectedClipId)}
+          onDuplicate={() => selectedClipId && duplicateSelected(selectedClipId)}
         />
 
         <VoiceCorrectionPanel

@@ -2,8 +2,16 @@
 
 import { useRef } from "react";
 import { MuteIcon, PauseIcon, PlayIcon, VolumeIcon } from "@/components/icons";
-import type { useTimelinePlayer, ClipLayoutEntry } from "@/lib/use-timeline-player";
+import { PLAYBACK_RATES, type useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { formatTimecode } from "./format";
+
+function StopIcon() {
+  return (
+    <svg width={13} height={13} viewBox="0 0 20 20" fill="currentColor">
+      <rect x="5" y="5" width="10" height="10" rx="1.5" />
+    </svg>
+  );
+}
 
 // Simple chevron-style step icons — not worth adding to the shared icon set
 // for two one-off glyphs used only here.
@@ -40,7 +48,8 @@ interface PreviewPanelProps {
 
 export default function PreviewPanel({ player, activeEntry, totalDurationMs, fps, onSetActiveClipVolume, onSetActiveClipMuted }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { videoRef, playheadMs, playing, buffering, togglePlay, seekTo, stepFrame, handleTimeUpdate, handleEnded } = player;
+  const { videoRef, playheadMs, playing, buffering, playbackRate, setPlaybackRate, stop, togglePlay, seekTo, stepFrame, handleTimeUpdate, handleEnded } =
+    player;
 
   function handleScrub(e: React.ChangeEvent<HTMLInputElement>) {
     seekTo(Number(e.target.value));
@@ -112,10 +121,35 @@ export default function PreviewPanel({ player, activeEntry, totalDurationMs, fps
           >
             <StepForwardIcon />
           </button>
+          <button
+            onClick={stop}
+            disabled={!hasClips}
+            title="Stop — pause and return to the start"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-panel hover:text-ink disabled:opacity-30"
+          >
+            <StopIcon />
+          </button>
 
           <span className="font-mono text-xs tabular-nums text-ink-muted">
             {formatTimecode(playheadMs, true)} / {formatTimecode(totalDurationMs, true)}
           </span>
+
+          <label className="flex items-center gap-1 text-xs text-ink-muted">
+            <span className="sr-only">Playback speed</span>
+            <select
+              value={playbackRate}
+              onChange={(e) => setPlaybackRate(Number(e.target.value))}
+              disabled={!hasClips}
+              title="Playback speed (preview only — does not change the exported video)"
+              className="rounded-md border border-line bg-surface px-1.5 py-1 text-xs text-ink outline-none focus:border-brand disabled:opacity-30 [color-scheme:dark]"
+            >
+              {PLAYBACK_RATES.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate}x
+                </option>
+              ))}
+            </select>
+          </label>
 
           <div className="ml-auto flex items-center gap-2">
             <button

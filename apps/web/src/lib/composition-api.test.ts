@@ -3,13 +3,16 @@ import {
   addAudioPatch,
   clampMoveStartMs,
   clipDurationFromTrim,
+  duplicateClip,
   MIN_CLIP_DURATION_MS,
   moveClip,
   newVideoClip,
   removeAudioPatch,
   removeRangeOnTrack,
   repackTrack,
+  rippleDeleteClip,
   splitClip,
+  trimClipOnTrack,
   type MediaClip,
 } from "./composition-api";
 
@@ -346,5 +349,119 @@ describe("moveClip", () => {
   it("is a no-op when the clip id doesn't exist", () => {
     const clips = [buildClip({ id: "a" })];
     expect(moveClip(clips, "missing", 5000)).toBe(clips);
+  });
+});
+
+describe("trimClipOnTrack", () => {
+  it("recomputes durationMs when trimming the end — the whole point, and what was previously missing", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 10_000 })];
+    const next = trimClipOnTrack(clips, "a", SOURCE_MS, 0, 3000)[0] as MediaClip;
+    expect(next.durationMs).toBe(7000);
+    expect(next.startMs).toBe(0); // end-edge trim never moves the left edge
+    expect(next.trimOutMs).toBe(3000);
+  });
+
+  it("moves the clip's timeline start when trimming from the start, keeping its right edge fixed", () => {
+    const clips = [buildClip({ id: "a", startMs: 4000, durationMs: 10_000 })];
+    const next = trimClipOnTrack(clips, "a", SOURCE_MS, 2500, 0)[0] as MediaClip;
+    expect(next.startMs).toBe(6500); // 4000 + 2500
+    expect(next.durationMs).toBe(7500); // 10000 - 2500
+    expect(next.startMs + next.durationMs).toBe(14_000); // right edge unchanged
+  });
+
+  it("clamps a start-edge trim so a clip can never be dragged back over its previous neighbour", () => {
+    const clips = [
+      buildClip({ id: "a", startMs: 0, durationMs: 5000 }),
+      buildClip({ id: "b", startMs: 5000, durationMs: 10_000, trimInMs: 3000 }),
+    ];
+    // Asking to un-trim all the way back would put b's start at 2000, inside a.
+    const next = trimClipOnTrack(clips, "b", SOURCE_MS, 0, 0).find((c) => c.id === "b") as MediaClip;
+    expect(next.startMs).toBe(5000); // pinned to a's end, not 2000
+    expect(next.trimInMs).toBe(3000); // trim given back only as far as there was room (i.e. none)
+  });
+
+  it("clamps an end-edge trim so a clip can never grow over its next neighbour", () => {
+    const clips = [
+      buildClip({ id: "a", startMs: 0, durationMs: 4000, trimOutMs: 6000 }),
+      buildClip({ id: "b", startMs: 6000, durationMs: 4000 }),
+    ];
+    // Un-trimming a fully would make it 10s long, running to 10000 — past b's start.
+    const next = trimClipOnTrack(clips, "a", SOURCE_MS, 0, 0).find((c) => c.id === "a") as MediaClip;
+    expect(next.startMs + next.durationMs).toBeLessThanOrEqual(6000);
+  });
+
+  it("never lets the two trims collapse the clip below the minimum duration", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 10_000 })];
+    const next = trimClipOnTrack(clips, "a", SOURCE_MS, 9900, 9900)[0] as MediaClip;
+    expect(next.durationMs).toBeGreaterThanOrEqual(MIN_CLIP_DURATION_MS);
+  });
+
+  it("shifts audio patches with the new local zero when trimming from the start", () => {
+    // Patch at local [5000,5500). Trimming 2000 off the front moves local
+    // zero forward by 2000, so the patch must land at [3000,3500).
+    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 5000, endMs: 5500 });
+    const next = trimClipOnTrack(withPatch, "a", SOURCE_MS, 2000, 0)[0] as MediaClip;
+    expect(next.audioPatches).toEqual([expect.objectContaining({ startMs: 3000, endMs: 3500 })]);
+  });
+
+  it("drops an audio patch that the trim removed entirely", () => {
+    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 500, endMs: 1000 });
+    const next = trimClipOnTrack(withPatch, "a", SOURCE_MS, 2000, 0)[0] as MediaClip;
+    expect(next.audioPatches).toHaveLength(0);
+  });
+
+  it("is a no-op for an unknown clip or an unresolved source duration", () => {
+    const clips = [buildClip({ id: "a" })];
+    expect(trimClipOnTrack(clips, "missing", SOURCE_MS, 0, 1000)).toBe(clips);
+    expect(trimClipOnTrack(clips, "a", 0, 0, 1000)).toBe(clips);
+  });
+});
+
+describe("rippleDeleteClip", () => {
+  it("removes the clip and pulls every later clip back by its duration", () => {
+    const clips = [
+      buildClip({ id: "a", startMs: 0, durationMs: 3000 }),
+      buildClip({ id: "b", startMs: 3000, durationMs: 2000 }),
+      buildClip({ id: "c", startMs: 5000, durationMs: 4000 }),
+    ];
+    const next = rippleDeleteClip(clips, "b");
+    expect(next.map((c) => c.id)).toEqual(["a", "c"]);
+    expect((next.find((c) => c.id === "c") as MediaClip).startMs).toBe(3000); // gap closed
+    expect((next.find((c) => c.id === "a") as MediaClip).startMs).toBe(0); // earlier clip untouched
+  });
+
+  it("leaves clips on other tracks where they are", () => {
+    const clips = [
+      buildClip({ id: "a", trackId: TRACK_A, startMs: 0, durationMs: 3000 }),
+      buildClip({ id: "b", trackId: TRACK_B, startMs: 5000, durationMs: 2000 }),
+    ];
+    const next = rippleDeleteClip(clips, "a");
+    expect((next.find((c) => c.id === "b") as MediaClip).startMs).toBe(5000);
+  });
+});
+
+describe("duplicateClip", () => {
+  it("places the copy immediately after the original when there's room", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 3000 })];
+    const next = duplicateClip(clips, "a");
+    expect(next).toHaveLength(2);
+    const copy = next.find((c) => c.id !== "a") as MediaClip;
+    expect(copy.startMs).toBe(3000);
+    expect(copy.durationMs).toBe(3000);
+  });
+
+  it("skips past an occupied slot rather than overlapping it", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 3000 }), buildClip({ id: "b", startMs: 3000, durationMs: 2000 })];
+    const copy = duplicateClip(clips, "a").find((c) => c.id !== "a" && c.id !== "b") as MediaClip;
+    expect(copy.startMs).toBe(5000); // after b, not on top of it
+  });
+
+  it("gives the copy's audio patches fresh ids so undoing one correction can't affect both clips", () => {
+    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 1000, endMs: 1500 });
+    const next = duplicateClip(withPatch, "a");
+    const original = next.find((c) => c.id === "a") as MediaClip;
+    const copy = next.find((c) => c.id !== "a") as MediaClip;
+    expect(copy.audioPatches[0].id).not.toBe(original.audioPatches[0].id);
+    expect(copy.audioPatches[0].startMs).toBe(1000); // same position within the clip
   });
 });
