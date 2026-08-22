@@ -107,10 +107,27 @@ function classifyKind(a: TranscriptSegment, b: TranscriptSegment, gapMs: number,
   // PHRASE/SENTENCE repeat, not a join artifact, even though both have a
   // small timing gap.
   if (a.clipId !== b.clipId && gapMs <= 1500) return "SCENE_JOIN";
-  const words = wordCount(a.text);
+  return classifyTextUnit(a.text);
+}
+
+// Sentence-final punctuation across the scripts this product actually
+// handles: Latin (. ? !) and Devanagari danda / double danda (। ॥).
+const SENTENCE_END = /[.?!।॥]\s*$/;
+
+// Word count alone mislabels short-but-complete sentences, and it does so
+// asymmetrically by language: "हम कल बैठक करेंगे" is a whole sentence in
+// four words, where the English equivalent ("we will hold the meeting
+// tomorrow") is six. Reporting that to the user as a "Repeated phrase"
+// when they can plainly see a repeated sentence is exactly the kind of
+// mislabelling that erodes trust in the whole feature, so punctuation —
+// which Whisper does emit — is treated as the stronger signal, with word
+// count only as the fallback when there is none.
+export function classifyTextUnit(text: string): "WORD" | "PHRASE" | "SENTENCE" {
+  const trimmed = text.trim();
+  const words = wordCount(trimmed);
   if (words <= 1) return "WORD";
-  if (words <= 4) return "PHRASE";
-  return "SENTENCE";
+  if (SENTENCE_END.test(trimmed)) return "SENTENCE";
+  return words <= 3 ? "PHRASE" : "SENTENCE";
 }
 
 // Cosine similarity of two vectors, 0 when dimensions mismatch — shared
