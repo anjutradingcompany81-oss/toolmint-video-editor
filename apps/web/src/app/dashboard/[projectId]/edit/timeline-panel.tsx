@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClipLayoutEntry } from "@/lib/use-timeline-player";
 import TimelineClipBlock from "./timeline-clip-block";
 import { formatTimecode } from "./format";
@@ -58,8 +58,17 @@ function RazorIcon() {
   );
 }
 
-const MIN_PPS = 10;
-const MAX_PPS = 300;
+// 10 px/s was too high a floor to ever see a long project at once: a
+// 4-minute video still needed ~2,500px, three times the panel's width, so
+// "Fit" couldn't actually fit. 2 px/s puts roughly 7 minutes on screen at
+// a typical panel width — an overview to navigate from, with the zoom
+// buttons for real work.
+export const MIN_PPS = 2;
+export const MAX_PPS = 300;
+// Empty run-off past the end of the last clip, so the final clip's trim
+// handle isn't jammed against the panel edge. Shared with zoomToFit, which
+// otherwise computes a zoom that overflows by exactly this much.
+const TRACK_TRAILING_PAD_PX = 100;
 // Smallest gap allowed between the In and Out marks while dragging a
 // selection handle — keeps the range from being dragged past itself.
 const MIN_SELECTION_GAP_MS = 100;
@@ -212,6 +221,52 @@ export default function TimelinePanel({
   const scrubbing = useRef(false);
   const selectionDrag = useRef<"start" | "end" | null>(null);
 
+  // How far the track is panned, and how far it *can* pan. At a normal zoom
+  // a multi-minute video is many times wider than the panel, so without an
+  // explicit way to move this window the later part of the timeline simply
+  // can't be reached — the native overflow scrollbar is easy to miss and
+  // hard to grab on a short track.
+  const [scroll, setScroll] = useState({ left: 0, max: 0 });
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const sync = () => setScroll({ left: el.scrollLeft, max: Math.max(0, el.scrollWidth - el.clientWidth) });
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    // Zoom changes and panel resizes both change how much there is to pan.
+    const observer = new ResizeObserver(sync);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      observer.disconnect();
+    };
+  }, [totalDurationMs, pixelsPerSecond, layout.length]);
+
+  // Keep the playhead in view when it moves out of the visible window —
+  // otherwise seeking from the full-duration scrubber (or just playing past
+  // the right edge) leaves the user looking at a stretch of timeline that
+  // no longer has the playhead in it. Only reacts to playhead/zoom changes,
+  // so panning by hand is never yanked back.
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const x = (playheadMs / 1000) * pixelsPerSecond;
+    const margin = 80;
+    if (x < el.scrollLeft + margin) el.scrollLeft = Math.max(0, x - margin);
+    else if (x > el.scrollLeft + el.clientWidth - margin) el.scrollLeft = x - el.clientWidth + margin;
+  }, [playheadMs, pixelsPerSecond]);
+
+  // Zoom level at which the entire project fits the panel exactly — the
+  // one-click way out of "my 4-minute video is 10,000px wide".
+  function zoomToFit() {
+    const el = trackRef.current;
+    if (!el || totalDurationMs === 0) return;
+    const available = Math.max(1, el.clientWidth - TRACK_TRAILING_PAD_PX - 24);
+    onZoomChange(Math.min(MAX_PPS, Math.max(MIN_PPS, available / (totalDurationMs / 1000))));
+    el.scrollLeft = 0;
+  }
+
   const snapPoints = useMemo(() => {
     const points = [0, totalDurationMs, playheadMs];
     layout.forEach((e) => {
@@ -276,7 +331,7 @@ export default function TimelinePanel({
     return marks;
   }, [totalDurationMs, pixelsPerSecond]);
 
-  const contentWidth = Math.max(600, (totalDurationMs / 1000) * pixelsPerSecond + 100);
+  const contentWidth = Math.max(600, (totalDurationMs / 1000) * pixelsPerSecond + TRACK_TRAILING_PAD_PX);
   const playheadX = (playheadMs / 1000) * pixelsPerSecond;
 
   // The in-progress selection: once In is marked, show a preview strip
@@ -289,7 +344,11 @@ export default function TimelinePanel({
   const selectionWidthPx = hasSelectionPreview ? ((selectionEndMs! - selectionStartMs!) / 1000) * pixelsPerSecond : 0;
 
   return (
-    <div className="flex h-64 shrink-0 flex-col border-t border-line bg-surface-2">
+    /* Height grows with the controls it actually contains rather than being
+       pinned to a fixed h-64: the toolbar wraps on narrower windows and the
+       pan row appears only for long projects, and at a fixed height those
+       pushed the full-duration scrubber off the bottom of the screen. */
+    <div className="flex max-h-[45vh] min-h-56 shrink-0 flex-col border-t border-line bg-surface-2">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
         <button
           onClick={onSplit}
@@ -371,6 +430,13 @@ export default function TimelinePanel({
         <span className="ml-auto font-mono text-xs tabular-nums text-ink-muted">{formatTimecode(playheadMs, true)}</span>
 
         <div className="ml-3 flex items-center gap-1 border-l border-line pl-3">
+          <button
+            onClick={zoomToFit}
+            title="Fit the whole video in the timeline"
+            className="rounded px-1.5 py-0.5 text-[11px] text-ink-muted hover:bg-panel hover:text-ink"
+          >
+            Fit
+          </button>
           <button
             onClick={() => onZoomChange(Math.max(MIN_PPS, pixelsPerSecond / 1.4))}
             title="Zoom out (Ctrl+-)"
@@ -486,6 +552,30 @@ export default function TimelinePanel({
               <div className="absolute -top-1 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 bg-brand" />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Horizontal pan. Only meaningful once the timeline is wider than
+          the panel, so it's hidden rather than shown disabled when the
+          whole project already fits. */}
+      {scroll.max > 0 && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-1.5">
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-ink-muted">Scroll timeline</span>
+          <input
+            type="range"
+            min={0}
+            max={scroll.max}
+            value={Math.min(scroll.left, scroll.max)}
+            onChange={(e) => {
+              if (trackRef.current) trackRef.current.scrollLeft = Number(e.target.value);
+            }}
+            title="Drag to move along the timeline"
+            className="h-1.5 flex-1 accent-brand"
+          />
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-ink-muted">
+            {formatTimecode((scroll.left / pixelsPerSecond) * 1000)} –{" "}
+            {formatTimecode(((scroll.left + (trackRef.current?.clientWidth ?? 0)) / pixelsPerSecond) * 1000)}
+          </span>
         </div>
       )}
 

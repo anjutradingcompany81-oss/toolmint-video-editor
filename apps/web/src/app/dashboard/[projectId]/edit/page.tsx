@@ -19,7 +19,7 @@ import {
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
 import PreviewPanel from "./preview-panel";
-import TimelinePanel from "./timeline-panel";
+import TimelinePanel, { MAX_PPS, MIN_PPS } from "./timeline-panel";
 import PropertiesPanel from "./properties-panel";
 import ExportModal from "./export-modal";
 import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel";
@@ -402,10 +402,10 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         player.stepFrame(1, project?.fps ?? 30);
       } else if (mod && (e.key === "=" || e.key === "+")) {
         e.preventDefault();
-        setPixelsPerSecond((p) => Math.min(300, p * 1.4));
+        setPixelsPerSecond((p) => Math.min(MAX_PPS, p * 1.4));
       } else if (mod && e.key === "-") {
         e.preventDefault();
-        setPixelsPerSecond((p) => Math.max(10, p / 1.4));
+        setPixelsPerSecond((p) => Math.max(MIN_PPS, p / 1.4));
       }
     }
     window.addEventListener("keydown", handleKeyDown);
