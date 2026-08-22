@@ -459,6 +459,69 @@ export function newOverlayTrack(name: string, order: number): Track {
 
 export type LogoCorner = "TOP_LEFT" | "TOP_RIGHT" | "BOTTOM_LEFT" | "BOTTOM_RIGHT" | "CUSTOM";
 
+export interface ContainRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** Screen pixels per canvas pixel. */
+  scale: number;
+}
+
+// Where the video actually sits inside its preview box.
+//
+// The preview element is a fixed 16:9 box with `object-contain`, so a
+// project whose canvas is any other shape is letterboxed - the picture is
+// centred with bars on two sides. Logo positions are stored in CANVAS
+// pixels, so dragging one has to convert through this rect rather than
+// through the box: using the box directly would place the logo correctly
+// only for exactly-16:9 footage and be off by the bar width for anything
+// else, which is precisely the case a person is most likely to check.
+export function fitContainRect(container: { width: number; height: number }, canvas: { width: number; height: number }): ContainRect {
+  if (container.width <= 0 || container.height <= 0 || canvas.width <= 0 || canvas.height <= 0) {
+    return { left: 0, top: 0, width: 0, height: 0, scale: 1 };
+  }
+  // "contain" fits the whole picture, so the limiting axis wins.
+  const scale = Math.min(container.width / canvas.width, container.height / canvas.height);
+  const width = canvas.width * scale;
+  const height = canvas.height * scale;
+  return { left: (container.width - width) / 2, top: (container.height - height) / 2, width, height, scale };
+}
+
+// Keeps a dragged logo fully inside the frame. A logo half off the edge
+// is almost always a slip rather than an intent, and the renderer's
+// overlay filter would crop it anyway - so clamping here keeps what the
+// preview shows and what the export produces identical.
+export function clampLogoPosition(
+  x: number,
+  y: number,
+  canvas: { width: number; height: number },
+  logo: { width: number; height: number },
+): { x: number; y: number } {
+  const maxX = Math.max(0, canvas.width - logo.width);
+  const maxY = Math.max(0, canvas.height - logo.height);
+  return {
+    x: Math.round(Math.min(Math.max(x, 0), maxX)),
+    y: Math.round(Math.min(Math.max(y, 0), maxY)),
+  };
+}
+
+// Moves one overlay clip to an absolute canvas position. Separate from
+// moveClip (which moves a clip in TIME) - this changes only where the
+// clip is drawn, never when it plays.
+export function positionOverlayClip(
+  clips: MediaClip[],
+  clipId: string,
+  x: number,
+  y: number,
+  canvas: { width: number; height: number },
+  logo: { width: number; height: number },
+): MediaClip[] {
+  const clamped = clampLogoPosition(x, y, canvas, logo);
+  return clips.map((c) => (c.id === clipId ? { ...c, transform: { ...c.transform, ...clamped } } : c));
+}
+
+
 // Pixel offset of a logo from the canvas edges, given the canvas and the
 // logo's own rendered size. The renderer's overlay filter takes absolute
 // x/y in canvas pixels, so a corner preset has to be resolved against the

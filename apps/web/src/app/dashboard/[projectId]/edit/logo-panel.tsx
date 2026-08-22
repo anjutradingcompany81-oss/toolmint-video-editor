@@ -23,6 +23,10 @@ interface LogoPanelProps {
   projectHeight: number;
   totalDurationMs: number;
   withOverlayClips: (mutate: (prev: MediaClip[], overlayTrackId: string) => MediaClip[]) => void;
+  // Shared with the drag layer on the preview so selecting a logo in
+  // either place highlights it in both.
+  selectedLogoId: string | null;
+  onSelectLogo: (clipId: string | null) => void;
 }
 
 export default function LogoPanel({
@@ -35,6 +39,8 @@ export default function LogoPanel({
   projectHeight,
   totalDurationMs,
   withOverlayClips,
+  selectedLogoId,
+  onSelectLogo,
 }: LogoPanelProps) {
   const [corner, setCorner] = useState<LogoCorner>("TOP_RIGHT");
   const [scalePct, setScalePct] = useState(15);
@@ -63,15 +69,24 @@ export default function LogoPanel({
   function addLogo() {
     if (!activeAssetId) return;
     const { x, y } = logoPosition(corner, { width: projectWidth, height: projectHeight }, renderedSize, marginPx);
-    withOverlayClips((prev, overlayTrackId) => [
-      ...prev,
-      newLogoClip(overlayTrackId, activeAssetId, 0, Math.max(1000, totalDurationMs), {
+    // The overlay track id is only known inside the mutator (the track is
+    // created lazily on first use), so the new clip's id is captured from
+    // there - the mutator runs synchronously, so it is set by the time
+    // this returns.
+    let createdId = "";
+    withOverlayClips((prev, overlayTrackId) => {
+      const clip = newLogoClip(overlayTrackId, activeAssetId, 0, Math.max(1000, totalDurationMs), {
         x,
         y,
         scale: transformScale,
         opacity: opacityPct / 100,
-      }),
-    ]);
+      });
+      createdId = clip.id;
+      return [...prev, clip];
+    });
+    // Select it straight away, so the ring on the preview shows which
+    // logo the next drag will move.
+    if (createdId) onSelectLogo(createdId);
   }
 
   function removeLogo(clipId: string) {
@@ -116,7 +131,7 @@ export default function LogoPanel({
             </div>
 
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
-              Position
+              Starting position
               <select
                 value={corner}
                 onChange={(e) => setCorner(e.target.value as LogoCorner)}
@@ -138,6 +153,11 @@ export default function LogoPanel({
               Rendered at {renderedSize.width}×{renderedSize.height}px on a {projectWidth}×{projectHeight} frame.
             </p>
 
+            <p className="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1.5 text-[11px] text-ink">
+              After adding it, <strong>drag the logo on the video preview</strong> to place it exactly where you want. Arrow keys nudge it a pixel
+              at a time; hold Shift for ten.
+            </p>
+
             <button
               onClick={addLogo}
               disabled={!activeAssetId || totalDurationMs === 0}
@@ -153,10 +173,28 @@ export default function LogoPanel({
                 {overlayClips.map((clip) => {
                   const asset = mediaById.get(clip.mediaAssetId);
                   return (
-                    <div key={clip.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-panel px-2.5 py-2 text-xs">
-                      <span className="truncate text-ink">{asset?.originalName ?? "Logo"}</span>
+                    <div
+                      key={clip.id}
+                      onClick={() => onSelectLogo(clip.id)}
+                      className={`flex cursor-pointer items-center justify-between gap-2 rounded-md border bg-panel px-2.5 py-2 text-xs ${
+                        selectedLogoId === clip.id ? "border-brand" : "border-line hover:border-brand/50"
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1 truncate text-ink">{asset?.originalName ?? "Logo"}</span>
+                      {/* Live coordinates, so a drag has a readable result and
+                          the same spot can be reproduced on another project. */}
+                      <span className="shrink-0 font-mono tabular-nums text-ink-muted">
+                        {Math.round(clip.transform.x)},{Math.round(clip.transform.y)}
+                      </span>
                       <span className="shrink-0 text-ink-muted">{Math.round(clip.transform.opacity * 100)}%</span>
-                      <button onClick={() => removeLogo(clip.id)} title="Remove this logo" className="shrink-0 text-ink-muted hover:text-danger">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeLogo(clip.id);
+                        }}
+                        title="Remove this logo"
+                        className="shrink-0 text-ink-muted hover:text-danger"
+                      >
                         <TrashIcon width={13} height={13} />
                       </button>
                     </div>

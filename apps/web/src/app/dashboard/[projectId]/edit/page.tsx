@@ -15,6 +15,7 @@ import {
   rippleDeleteClip,
   duplicateClip,
   type MediaClip,
+  positionOverlayClip,
 } from "@/lib/composition-api";
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
@@ -26,6 +27,7 @@ import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel
 import LogoPanel from "./logo-panel";
 import SubtitlesPanel from "./subtitles-panel";
 import VoiceOverPanel from "./voice-over-panel";
+import LogoOverlay from "./logo-overlay";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -93,6 +95,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [logoOpen, setLogoOpen] = useState(false);
   const [subtitlesOpen, setSubtitlesOpen] = useState(false);
   const [voiceOverOpen, setVoiceOverOpen] = useState(false);
+  const [selectedLogoId, setSelectedLogoId] = useState<string | null>(null);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
@@ -256,6 +259,19 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
       withClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, muted } : c)));
     },
     [withClips],
+  );
+
+  // Dragging a logo on the preview. Goes through withOverlayClips like
+  // every other overlay edit, so a drag is undoable (the hook coalesces
+  // the burst of pointermove updates into one history entry) and is saved
+  // by the same autosave as everything else.
+  const moveLogo = useCallback(
+    (clipId: string, x: number, y: number, logoSize: { width: number; height: number }) => {
+      withOverlayClips((prev) =>
+        positionOverlayClip(prev, clipId, x, y, { width: canvasWidth, height: canvasHeight }, logoSize),
+      );
+    },
+    [withOverlayClips, canvasWidth, canvasHeight],
   );
 
   // Clearing the trims has to go through the same geometry recompute as any
@@ -514,6 +530,19 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             fps={project.fps}
             onSetActiveClipVolume={(volume) => activeEntry && setClipVolume(activeEntry.clip.id, volume)}
             onSetActiveClipMuted={(muted) => activeEntry && setClipMuted(activeEntry.clip.id, muted)}
+            overlay={(containerRef) => (
+              <LogoOverlay
+                overlayClips={overlayClips}
+                mediaById={mediaById}
+                canvasWidth={canvasWidth}
+                canvasHeight={canvasHeight}
+                playheadMs={player.playheadMs}
+                containerRef={containerRef}
+                selectedLogoId={selectedLogoId}
+                onSelect={setSelectedLogoId}
+                onMove={moveLogo}
+              />
+            )}
           />
 
           <TimelinePanel
@@ -568,6 +597,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           projectHeight={canvasHeight}
           totalDurationMs={totalDurationMs}
           withOverlayClips={withOverlayClips}
+          selectedLogoId={selectedLogoId}
+          onSelectLogo={setSelectedLogoId}
         />
 
         <SubtitlesPanel

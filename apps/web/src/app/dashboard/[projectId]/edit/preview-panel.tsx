@@ -44,9 +44,21 @@ interface PreviewPanelProps {
   fps: number;
   onSetActiveClipVolume: (volume: number) => void;
   onSetActiveClipMuted: (muted: boolean) => void;
+  // Rendered inside the video frame so logos can be dragged directly on
+  // the picture. Passed in rather than built here so this component stays
+  // about playback and doesn't need to know what an overlay clip is.
+  overlay?: (containerRef: React.RefObject<HTMLDivElement | null>) => React.ReactNode;
 }
 
-export default function PreviewPanel({ player, activeEntry, totalDurationMs, fps, onSetActiveClipVolume, onSetActiveClipMuted }: PreviewPanelProps) {
+export default function PreviewPanel({
+  player,
+  activeEntry,
+  totalDurationMs,
+  fps,
+  onSetActiveClipVolume,
+  onSetActiveClipMuted,
+  overlay,
+}: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { videoRef, playheadMs, playing, buffering, playbackRate, setPlaybackRate, stop, togglePlay, seekTo, stepFrame, handleTimeUpdate, handleEnded } =
     player;
@@ -73,6 +85,7 @@ export default function PreviewPanel({ player, activeEntry, totalDurationMs, fps
           onTimeUpdate={handleTimeUpdate}
           onEnded={handleEnded}
         />
+        {hasClips && overlay?.(containerRef)}
         {!hasClips && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-ink-muted">
             <p className="text-sm">Add clips to the timeline to preview them here</p>

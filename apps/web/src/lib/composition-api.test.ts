@@ -14,6 +14,9 @@ import {
   splitClip,
   trimClipOnTrack,
   type MediaClip,
+  fitContainRect,
+  clampLogoPosition,
+  positionOverlayClip,
 } from "./composition-api";
 
 const TRACK_A = "track_a";
@@ -472,5 +475,111 @@ describe("duplicateClip", () => {
     const copy = next.find((c) => c.id !== "a") as MediaClip;
     expect(copy.audioPatches[0].id).not.toBe(original.audioPatches[0].id);
     expect(copy.audioPatches[0].startMs).toBe(1000); // same position within the clip
+  });
+});
+
+describe("fitContainRect", () => {
+  it("fills the box exactly when the canvas matches its aspect ratio", () => {
+    const rect = fitContainRect({ width: 960, height: 540 }, { width: 1920, height: 1080 });
+    expect(rect).toEqual({ left: 0, top: 0, width: 960, height: 540, scale: 0.5 });
+  });
+
+  it("letterboxes a canvas taller than the box, centring it horizontally", () => {
+    // A 1:1 canvas in a 16:9 box: height is the limit, bars left and right.
+    const rect = fitContainRect({ width: 1600, height: 900 }, { width: 1000, height: 1000 });
+    expect(rect.height).toBe(900);
+    expect(rect.width).toBe(900);
+    expect(rect.left).toBe(350);
+    expect(rect.top).toBe(0);
+  });
+
+  it("letterboxes a canvas wider than the box, centring it vertically", () => {
+    const rect = fitContainRect({ width: 1000, height: 1000 }, { width: 2000, height: 1000 });
+    expect(rect.width).toBe(1000);
+    expect(rect.height).toBe(500);
+    expect(rect.top).toBe(250);
+    expect(rect.left).toBe(0);
+  });
+
+  it("returns a harmless zero rect before layout, instead of dividing by zero", () => {
+    expect(fitContainRect({ width: 0, height: 0 }, { width: 1920, height: 1080 })).toEqual({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      scale: 1,
+    });
+    expect(fitContainRect({ width: 800, height: 450 }, { width: 0, height: 0 }).scale).toBe(1);
+  });
+});
+
+describe("clampLogoPosition", () => {
+  const canvas = { width: 1920, height: 1080 };
+  const logo = { width: 200, height: 100 };
+
+  it("leaves a position that is already inside the frame alone", () => {
+    expect(clampLogoPosition(300, 400, canvas, logo)).toEqual({ x: 300, y: 400 });
+  });
+
+  it("stops the logo at the right and bottom edges rather than letting it leave the frame", () => {
+    expect(clampLogoPosition(5000, 5000, canvas, logo)).toEqual({ x: 1720, y: 980 });
+  });
+
+  it("stops at the top-left edge for negative drags", () => {
+    expect(clampLogoPosition(-50, -80, canvas, logo)).toEqual({ x: 0, y: 0 });
+  });
+
+  it("pins a logo larger than the canvas to the origin instead of a negative position", () => {
+    expect(clampLogoPosition(10, 10, { width: 100, height: 100 }, { width: 400, height: 400 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("rounds to whole pixels, since the renderer's overlay takes integer offsets", () => {
+    expect(clampLogoPosition(100.6, 200.4, canvas, logo)).toEqual({ x: 101, y: 200 });
+  });
+});
+
+describe("positionOverlayClip", () => {
+  const canvas = { width: 1920, height: 1080 };
+  const logo = { width: 200, height: 100 };
+
+  function overlay(id: string, x: number, y: number) {
+    return {
+      id,
+      trackId: "t_overlay",
+      kind: "overlay" as const,
+      mediaAssetId: "m1",
+      startMs: 0,
+      durationMs: 5000,
+      trimInMs: 0,
+      trimOutMs: 0,
+      volume: 0,
+      muted: true,
+      speedPercent: 100,
+      transform: { x, y, scale: 0.5, rotation: 0, opacity: 0.9 },
+      audioPatches: [],
+    };
+  }
+
+  it("moves only the targeted clip", () => {
+    const next = positionOverlayClip([overlay("a", 0, 0), overlay("b", 10, 10)], "b", 500, 300, canvas, logo);
+    expect(next[0]!.transform).toMatchObject({ x: 0, y: 0 });
+    expect(next[1]!.transform).toMatchObject({ x: 500, y: 300 });
+  });
+
+  it("preserves scale and opacity — dragging changes position only", () => {
+    const next = positionOverlayClip([overlay("a", 0, 0)], "a", 400, 200, canvas, logo);
+    expect(next[0]!.transform.scale).toBe(0.5);
+    expect(next[0]!.transform.opacity).toBe(0.9);
+  });
+
+  it("does not move the clip in time", () => {
+    const next = positionOverlayClip([overlay("a", 0, 0)], "a", 400, 200, canvas, logo);
+    expect(next[0]!.startMs).toBe(0);
+    expect(next[0]!.durationMs).toBe(5000);
+  });
+
+  it("clamps a drag past the edge", () => {
+    const next = positionOverlayClip([overlay("a", 0, 0)], "a", 99999, 99999, canvas, logo);
+    expect(next[0]!.transform).toMatchObject({ x: 1720, y: 980 });
   });
 });
