@@ -78,6 +78,15 @@ enum VoiceScanStatus {
   PAUSED
 }
 
+enum VoiceOverStatus {
+  QUEUED
+  SYNTHESIZING
+  MIXING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum SensitivityPreset {
   LOW
   BALANCED
@@ -225,6 +234,8 @@ model Project {
   mediaAssets   MediaAsset[]
   exportJobs    ExportJob[]
   voiceScanJobs VoiceScanJob[]
+  voiceOverJobs VoiceOverJob[]
+  voiceOverScript VoiceOverScript?
 
   @@index([workspaceId])
   @@map("projects")
@@ -426,4 +437,61 @@ model AuditLog {
   @@index([workspaceId, createdAt])
   @@index([actorId])
   @@map("audit_logs")
+}
+
+// The working draft of a voice-over script - one per project, edited in
+// place as the user rewrites dialogue. Kept OUT of the timeline JSON
+// (where subtitles live) on purpose: the timeline is rewritten by the
+// editor's autosave on every clip drag, and carrying a full rewritten
+// script through those writes would mean re-sending kilobytes of prose
+// for an operation that has nothing to do with it. The script also isn't
+// a render input - the generated audio asset is.
+model VoiceOverScript {
+  id         String   @id @default(cuid())
+  projectId  String   @unique
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Which TTS provider the user last chose, so reopening the panel
+  // restores their selection rather than silently resetting to the
+  // default - which may not be the one they actually have a key for.
+  providerId String?
+  // VoiceOverLine[] - { id, startMs, text, voiceId, speakerLabel }.
+  // startMs is a TIMELINE position, so a line stays where the user put it
+  // regardless of which clip happens to sit there.
+  lines      Json     @default("[]")
+  updatedAt  DateTime @updatedAt
+
+  @@map("voice_over_scripts")
+}
+
+model VoiceOverJob {
+  id                 String          @id @default(cuid())
+  projectId          String
+  project            Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status             VoiceOverStatus @default(QUEUED)
+  stageLabel         String?
+  progress           Int             @default(0)
+  providerId         String
+  // A snapshot of the script as it was when Generate was pressed - NOT a
+  // pointer to VoiceOverScript. The user stays free to keep editing the
+  // draft while a job runs, and a finished job has to remain an honest
+  // record of what was actually spoken into the file it produced.
+  lines              Json
+  // Per-line measured output: { lineId, durationMs, overlapsNextByMs }.
+  // Synthesis length isn't knowable in advance (it depends on the words),
+  // so this is how the UI can tell the user that a rewritten line now
+  // runs past the start of the line after it.
+  lineTimings        Json?
+  // The mixed voice-over track, registered as an ordinary project
+  // MediaAsset so it reaches the timeline through exactly the same path
+  // as an uploaded audio file - no special-case clip kind, and no
+  // separate preview or export handling.
+  resultMediaAssetId String?
+  cancelRequested    Boolean         @default(false)
+  errorMessage       String?
+  requestedById      String
+  createdAt          DateTime        @default(now())
+  completedAt        DateTime?
+
+  @@index([projectId, createdAt])
+  @@map("voice_over_jobs")
 }

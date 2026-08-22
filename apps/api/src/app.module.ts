@@ -10,6 +10,7 @@ import { ProjectsModule } from "./projects/projects.module";
 import { MediaModule } from "./media/media.module";
 import { RenderModule } from "./render/render.module";
 import { VoiceModule } from "./voice/voice.module";
+import { VoiceOverModule } from "./voice-over/voice-over.module";
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { VoiceModule } from "./voice/voice.module";
     MediaModule,
     RenderModule,
     VoiceModule,
+    VoiceOverModule,
   ],
 })
 export class AppModule {}

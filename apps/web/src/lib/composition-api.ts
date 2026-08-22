@@ -421,6 +421,35 @@ export function newVideoTrack(name: string, order: number): Track {
   return { id: randomId("track"), kind: "video", name, order, locked: false, hidden: false, muted: false, solo: false };
 }
 
+// The generated AI voice over lands on its own audio track rather than
+// being mixed into the source clips: the source stays untouched (this is a
+// non-destructive editor), the user can mute or delete the narration in
+// one action, and regenerating just replaces this track's contents.
+export function newAudioTrack(name: string, order: number): Track {
+  return { id: randomId("track"), kind: "audio", name, order, locked: false, hidden: false, muted: false, solo: false };
+}
+
+// An audio clip is a media clip with no picture — the renderer already
+// mixes any "audio"-kind clip through the same amix path as a video
+// clip's embedded audio, so nothing downstream needs a new case for it.
+export function newAudioClip(trackId: string, mediaAssetId: string, startMs: number, durationMs: number): MediaClip {
+  return {
+    id: randomId("clip"),
+    trackId,
+    kind: "audio",
+    mediaAssetId,
+    startMs,
+    durationMs,
+    trimInMs: 0,
+    trimOutMs: 0,
+    volume: 1,
+    muted: false,
+    speedPercent: 100,
+    transform: { ...DEFAULT_TRANSFORM },
+    audioPatches: [],
+  };
+}
+
 // Overlay tracks composite above video (higher `order` renders on top —
 // see merge-ffmpeg.util.ts's overlay chain), which is what a logo or
 // watermark needs.

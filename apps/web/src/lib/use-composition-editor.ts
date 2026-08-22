@@ -8,6 +8,8 @@ import {
   saveComposition,
   newVideoTrack,
   newOverlayTrack,
+  newAudioTrack,
+  newAudioClip,
   DEFAULT_SUBTITLE_STYLE,
   type Clip,
   type MediaClip,
@@ -55,6 +57,12 @@ export function useCompositionEditor(projectId: string) {
   // Captions live on the timeline (not as clips) because they're one
   // ordered script the user edits as a whole, and because burn-in goes
   // through ffmpeg's subtitles filter rather than the compositing path.
+  // The generated AI voice over gets its own audio track. Like the overlay
+  // track it's created lazily and is never rippled or repacked — narration
+  // is positioned against the timeline, so trimming a video clip must not
+  // drag the voice over along with it.
+  const [voiceOverTrackId, setVoiceOverTrackId] = useState<string | null>(null);
+  const [voiceOverClips, setVoiceOverClips] = useState<MediaClip[]>([]);
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [loading, setLoading] = useState(true);
@@ -71,6 +79,8 @@ export function useCompositionEditor(projectId: string) {
   const timelineRef = useRef(timeline);
   const trackIdRef = useRef(trackId);
   const overlayTrackIdRef = useRef(overlayTrackId);
+  const voiceOverTrackIdRef = useRef(voiceOverTrackId);
+  const voiceOverClipsRef = useRef(voiceOverClips);
   const subtitlesRef = useRef(subtitles);
   const subtitleStyleRef = useRef(subtitleStyle);
   useEffect(() => {
@@ -79,9 +89,11 @@ export function useCompositionEditor(projectId: string) {
     timelineRef.current = timeline;
     trackIdRef.current = trackId;
     overlayTrackIdRef.current = overlayTrackId;
+    voiceOverTrackIdRef.current = voiceOverTrackId;
+    voiceOverClipsRef.current = voiceOverClips;
     subtitlesRef.current = subtitles;
     subtitleStyleRef.current = subtitleStyle;
-  }, [clips, overlayClips, timeline, trackId, overlayTrackId, subtitles, subtitleStyle]);
+  }, [clips, overlayClips, timeline, trackId, overlayTrackId, voiceOverTrackId, voiceOverClips, subtitles, subtitleStyle]);
 
   // Undo snapshots BOTH tracks together, so undoing a logo placement can't
   // leave the video track from a different point in history (and vice
@@ -125,6 +137,10 @@ export function useCompositionEditor(projectId: string) {
         // use a logo need one, and adding an empty track to every project
         // would just be noise in the saved composition.
         const overlayTrack = loadedTimeline.tracks.find((t) => t.kind === "overlay") ?? null;
+        // Same laziness for narration. Matched by kind rather than by
+        // name so renaming the track in a future multitrack UI can't
+        // orphan the voice over the user already generated.
+        const voiceOverTrack = loadedTimeline.tracks.find((t) => t.kind === "audio") ?? null;
 
         setProject(proj);
         setTimeline(loadedTimeline);
@@ -132,6 +148,8 @@ export function useCompositionEditor(projectId: string) {
         setClips(clipsOnTrack(loadedTimeline.clips, videoTrack.id));
         setOverlayTrackId(overlayTrack?.id ?? null);
         setOverlayClips(overlayTrack ? clipsOnTrack(loadedTimeline.clips, overlayTrack.id) : []);
+        setVoiceOverTrackId(voiceOverTrack?.id ?? null);
+        setVoiceOverClips(voiceOverTrack ? clipsOnTrack(loadedTimeline.clips, voiceOverTrack.id) : []);
         // Projects saved before captions existed have neither field.
         setSubtitles(loadedTimeline.subtitles ?? []);
         setSubtitleStyle(loadedTimeline.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE);
@@ -166,6 +184,7 @@ export function useCompositionEditor(projectId: string) {
       nextOverlayClips: MediaClip[],
       extraTracks: Track[] = [],
       captions?: { subtitles: SubtitleCue[]; subtitleStyle: SubtitleStyle },
+      nextVoiceOverClips?: MediaClip[],
     ) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -179,13 +198,18 @@ export function useCompositionEditor(projectId: string) {
           // Merge both managed tracks back into the full clip list — clips
           // on any track this editor doesn't manage are carried through
           // unchanged.
-          const managedTrackIds = new Set([currentTrackId, overlayTrackIdRef.current].filter(Boolean) as string[]);
+          const managedTrackIds = new Set(
+            [currentTrackId, overlayTrackIdRef.current, voiceOverTrackIdRef.current].filter(Boolean) as string[],
+          );
           const otherClips = current.clips.filter((c) => !managedTrackIds.has(c.trackId));
+          // Carried through on every save, exactly like captions, so an
+          // unrelated clip edit can't drop the narration off the timeline.
+          const voiceOver = nextVoiceOverClips ?? voiceOverClipsRef.current;
           const tracks = [...current.tracks, ...extraTracks.filter((t) => !current.tracks.some((existing) => existing.id === t.id))];
           const payload: Timeline = {
             ...current,
             tracks,
-            clips: [...otherClips, ...nextClips, ...nextOverlayClips],
+            clips: [...otherClips, ...nextClips, ...nextOverlayClips, ...voiceOver],
             // Captions are only overwritten by an edit that actually
             // changed them; every other save carries the current ones
             // through so a clip edit can't wipe the script.
@@ -270,6 +294,47 @@ export function useCompositionEditor(projectId: string) {
     scheduleSave(clipsRef.current, next, newTracks);
   }
 
+  // Drops a freshly generated voice over onto the timeline, replacing any
+  // previous one. Replace rather than append: regenerating after rewriting
+  // a line is the normal case, and stacking the old narration under the
+  // new one would have both speaking at once.
+  //
+  // Not routed through the undo stack — the audio it points at is produced
+  // by a server-side job, so "undoing" back to a previous generation would
+  // reference a different asset than the panel is showing.
+  function placeVoiceOver(mediaAssetId: string, durationMs: number) {
+    const current = timelineRef.current;
+    if (!current) return;
+
+    const existingTrackId = voiceOverTrackIdRef.current;
+    const newTracks: Track[] = [];
+    let targetTrackId: string;
+    if (existingTrackId) {
+      targetTrackId = existingTrackId;
+    } else {
+      const highestOrder = current.tracks.reduce((max, t) => Math.max(max, t.order), 0);
+      const track = newAudioTrack("Voice over", highestOrder + 1);
+      targetTrackId = track.id;
+      newTracks.push(track);
+      setVoiceOverTrackId(track.id);
+      voiceOverTrackIdRef.current = track.id;
+    }
+
+    // startMs 0: the mixed file already has each line positioned at its
+    // own timeline offset, with silence in between, so the track as a
+    // whole starts at zero.
+    const next = [newAudioClip(targetTrackId, mediaAssetId, 0, durationMs)];
+    setVoiceOverClips(next);
+    voiceOverClipsRef.current = next;
+    scheduleSave(clipsRef.current, overlayClipsRef.current, newTracks, undefined, next);
+  }
+
+  function removeVoiceOver() {
+    setVoiceOverClips([]);
+    voiceOverClipsRef.current = [];
+    scheduleSave(clipsRef.current, overlayClipsRef.current, [], undefined, []);
+  }
+
   // Captions are edited as a script, so they're saved directly rather than
   // going through the clip-history stack — undoing a cut should not also
   // revert unrelated caption text.
@@ -312,6 +377,10 @@ export function useCompositionEditor(projectId: string) {
     overlayTrackId,
     overlayClips,
     withOverlayClips,
+    voiceOverTrackId,
+    voiceOverClips,
+    placeVoiceOver,
+    removeVoiceOver,
     subtitles,
     subtitleStyle,
     updateSubtitles,

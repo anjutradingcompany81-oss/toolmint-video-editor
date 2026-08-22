@@ -319,10 +319,24 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   if (audioLabels.length === 1) {
     filterParts.push(`[${audioLabels[0]}]anull[aout]`);
   } else {
-    // amix defaults to normalize=1 (auto-scales to avoid clipping as
-    // inputs are added) — no manual volume compensation needed on top.
+    // normalize=0 is deliberate, and amix's default of 1 is wrong here.
+    //
+    // With normalize=1 amix divides the output by the number of inputs,
+    // so the mix gets quieter the more inputs there are — and one of the
+    // inputs is always the base silence track, which contributes no sound
+    // but still counts in the divisor. Measured on a real export: source
+    // audio at -20.9 dB mean came out at -36.9 dB once a voice-over track
+    // was added. Splitting a video into more clips made its audio quieter
+    // for the same reason, which is not something a cut should ever do.
+    //
+    // With normalize=0 every input keeps the level it was given, and the
+    // per-clip `volume` applied above is the only thing that changes it —
+    // i.e. the volume control in the UI is now the real mixing control.
+    // Summed overlapping tracks can in principle clip, which is what that
+    // per-clip control is for; silently attenuating everything instead is
+    // the worse trade.
     const inputs = audioLabels.map((l) => `[${l}]`).join("");
-    filterParts.push(`${inputs}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0[aout]`);
+    filterParts.push(`${inputs}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0:normalize=0[aout]`);
   }
 
   args.push("-filter_complex", filterParts.join(";"));

@@ -193,6 +193,22 @@ describe("buildMultitrackMergeArgs", () => {
     expect(filter).toContain("amix=inputs=3"); // base silence + 2 real audio clips
   });
 
+  it("mixes without amix's default normalisation, so adding a track can't quieten the others", () => {
+    // amix's normalize=1 divides the output by the input count, and the
+    // always-present base silence track counts towards that divisor - so
+    // the default would make audio quieter purely because a voice-over
+    // track exists, or because the video was cut into more clips.
+    // Measured on a real export before this was fixed: -20.9 dB source
+    // audio arrived at -36.9 dB.
+    const args = buildMultitrackMergeArgs({
+      ...BASE_PLAN,
+      visualClips: [buildVisual()],
+      audioClips: [buildAudio({ startMs: 0 }), buildAudio({ startMs: 2000, localPath: "/tmp/voice.mp3" })],
+    });
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter).toContain("normalize=0");
+  });
+
   it("does not add a filter stage for a clip with no source audio", () => {
     const args = buildMultitrackMergeArgs({
       ...BASE_PLAN,

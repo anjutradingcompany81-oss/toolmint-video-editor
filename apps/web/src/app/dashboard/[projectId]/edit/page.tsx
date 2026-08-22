@@ -25,6 +25,7 @@ import ExportModal from "./export-modal";
 import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel";
 import LogoPanel from "./logo-panel";
 import SubtitlesPanel from "./subtitles-panel";
+import VoiceOverPanel from "./voice-over-panel";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -59,6 +60,9 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     clips,
     overlayClips,
     withOverlayClips,
+    voiceOverClips,
+    placeVoiceOver,
+    removeVoiceOver,
     subtitles,
     subtitleStyle,
     updateSubtitles,
@@ -88,6 +92,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [voiceCorrectionOpen, setVoiceCorrectionOpen] = useState(false);
   const [logoOpen, setLogoOpen] = useState(false);
   const [subtitlesOpen, setSubtitlesOpen] = useState(false);
+  const [voiceOverOpen, setVoiceOverOpen] = useState(false);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
@@ -488,6 +493,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         logoOpen={logoOpen}
         onToggleSubtitles={() => setSubtitlesOpen((v) => !v)}
         subtitlesOpen={subtitlesOpen}
+        onToggleVoiceOver={() => setVoiceOverOpen((v) => !v)}
+        voiceOverOpen={voiceOverOpen}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -571,6 +578,22 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           subtitleStyle={subtitleStyle}
           onChange={updateSubtitles}
           onSeek={player.seekTo}
+        />
+
+        <VoiceOverPanel
+          open={voiceOverOpen}
+          onClose={() => setVoiceOverOpen(false)}
+          projectId={projectId}
+          onSeek={player.seekTo}
+          hasVoiceOverOnTimeline={voiceOverClips.length > 0}
+          onPlaced={(asset, durationMs) => {
+            placeVoiceOver(asset.id, durationMs);
+            // The generated track is a real project asset, so it belongs
+            // in the media list too - it was created server-side after
+            // this page loaded, so nothing else would put it there.
+            setMedia((prev) => (prev.some((m) => m.id === asset.id) ? prev : [asset, ...prev]));
+          }}
+          onRemove={removeVoiceOver}
         />
 
         <VoiceCorrectionPanel

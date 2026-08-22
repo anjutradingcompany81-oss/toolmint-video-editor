@@ -24,6 +24,8 @@ interface EditorHeaderProps {
   logoOpen: boolean;
   onToggleSubtitles: () => void;
   subtitlesOpen: boolean;
+  onToggleVoiceOver: () => void;
+  voiceOverOpen: boolean;
 }
 
 export default function EditorHeader({
@@ -42,6 +44,8 @@ export default function EditorHeader({
   logoOpen,
   onToggleSubtitles,
   subtitlesOpen,
+  onToggleVoiceOver,
+  voiceOverOpen,
 }: EditorHeaderProps) {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -103,6 +107,17 @@ export default function EditorHeader({
           }`}
         >
           Logo
+        </button>
+
+        <button
+          onClick={onToggleVoiceOver}
+          aria-pressed={voiceOverOpen}
+          title="AI Voice Over — rewrite the dialogue and have it spoken in a new voice"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+            voiceOverOpen ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          <MicWaveIcon width={14} height={14} /> AI Voice Over
         </button>
 
         <button
