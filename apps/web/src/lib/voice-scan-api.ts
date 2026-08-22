@@ -85,6 +85,14 @@ export interface RepetitionResult {
   originalEndMs: number;
   repeatedStartMs: number;
   repeatedEndMs: number;
+  // Offsets into the SOURCE media file. Unlike the timeline coordinates
+  // above (and clipId), these stay valid after the user cuts, splits, moves
+  // or trims — which is what makes a correction still applicable after an
+  // edit. Null on results from scans that predate this field.
+  sourceOriginalStartMs: number | null;
+  sourceOriginalEndMs: number | null;
+  sourceRepeatedStartMs: number | null;
+  sourceRepeatedEndMs: number | null;
   originalText: string;
   repeatedText: string;
   speakerLabel: string | null;

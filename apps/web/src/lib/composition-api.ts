@@ -147,6 +147,54 @@ function remapAudioPatches(patches: AudioPatch[], windowStartMs: number, windowE
   return result;
 }
 
+export interface ResolvedSourceRange {
+  clip: MediaClip;
+  /** Clip-local ms, i.e. the coordinate space audioPatches use. */
+  localStartMs: number;
+  localEndMs: number;
+  /** Absolute timeline ms, for seeking and for a whole-range cut. */
+  timelineStartMs: number;
+  timelineEndMs: number;
+}
+
+// Finds where a range of the ORIGINAL media file currently sits on the
+// timeline. AI corrections are discovered against the source audio, but the
+// clip carrying that audio can afterwards be trimmed, split (which mints
+// brand-new clip ids), moved, duplicated or reordered — so a correction
+// recorded as "clipId X, timeline 2:26" is stale the moment the user edits,
+// while "source offset 146,480ms of asset Y" stays true forever.
+//
+// Picks the clip with the largest overlap, since a split can leave the
+// requested range straddling two clips; the correction is then applied to
+// whichever half actually contains most of it, clamped to that clip.
+export function resolveSourceRange(clips: Clip[], mediaAssetId: string, sourceStartMs: number, sourceEndMs: number): ResolvedSourceRange | null {
+  let best: ResolvedSourceRange | null = null;
+  let bestOverlap = 0;
+
+  for (const clip of clips) {
+    if (clip.kind === "text" || clip.mediaAssetId !== mediaAssetId) continue;
+    const clipSourceStart = clip.trimInMs;
+    const clipSourceEnd = clip.trimInMs + clip.durationMs;
+    const overlapStart = Math.max(sourceStartMs, clipSourceStart);
+    const overlapEnd = Math.min(sourceEndMs, clipSourceEnd);
+    const overlap = overlapEnd - overlapStart;
+    if (overlap <= bestOverlap) continue;
+
+    bestOverlap = overlap;
+    const localStartMs = overlapStart - clipSourceStart;
+    const localEndMs = overlapEnd - clipSourceStart;
+    best = {
+      clip,
+      localStartMs,
+      localEndMs,
+      timelineStartMs: clip.startMs + localStartMs,
+      timelineEndMs: clip.startMs + localEndMs,
+    };
+  }
+
+  return bestOverlap >= MIN_PATCH_DURATION_MS ? best : null;
+}
+
 export type AddPatchResult = { ok: true; clips: Clip[] } | { ok: false; message: string };
 
 // Adds one room-tone patch to a specific clip (AI Repetitive Voice

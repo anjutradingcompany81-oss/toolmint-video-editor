@@ -375,11 +375,24 @@ model RepetitionResult {
   mediaAsset            MediaAsset             @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
   kind                  RepetitionKind
   // Timeline-absolute ms, matching the composition's own coordinate space
-  // at scan time.
+  // at scan time. Only safe for display//seeking — see the source-relative
+  // pair below for anything that has to survive an edit.
   originalStartMs       Int
   originalEndMs         Int
   repeatedStartMs       Int
   repeatedEndMs         Int
+  // The same two ranges expressed as offsets into the SOURCE media file.
+  // Timeline coordinates and clipId both change the moment the user cuts or
+  // splits (removeRangeOnTrack/splitClip mint fresh clip ids and shift every
+  // later clip), which orphaned every result from a scan taken before an
+  // edit — "That clip no longer exists on the timeline". Source offsets are
+  // immutable for a given asset, so a correction can still be located after
+  // arbitrary trimming, splitting, moving or reordering. Nullable because
+  // rows written before this field existed have no value for it.
+  sourceOriginalStartMs Int?
+  sourceOriginalEndMs   Int?
+  sourceRepeatedStartMs Int?
+  sourceRepeatedEndMs   Int?
   originalText          String
   repeatedText          String
   speakerLabel          String?

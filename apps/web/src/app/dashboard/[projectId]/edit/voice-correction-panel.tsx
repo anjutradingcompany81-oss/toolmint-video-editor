@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MediaAsset } from "@/lib/projects-api";
-import { addAudioPatch, removeAudioPatch, removeRangeOnTrack, type Clip, type MediaClip } from "@/lib/composition-api";
+import { addAudioPatch, removeAudioPatch, removeRangeOnTrack, resolveSourceRange, type Clip, type MediaClip } from "@/lib/composition-api";
 import {
   ACTIVE_VOICE_SCAN_STATUSES,
   batchMarkResults,
@@ -231,19 +231,52 @@ export default function VoiceCorrectionPanel({
     window.setTimeout(() => audio.pause(), durationS * 1000 + 150);
   }
 
+  // Where a scan result currently lives on the timeline. Prefers the
+  // source-file offsets (immutable across edits); falls back to the clip id
+  // + timeline position for results recorded before those were stored.
+  const resolveTarget = useCallback(
+    (result: RepetitionResult) => {
+      if (result.sourceRepeatedStartMs != null && result.sourceRepeatedEndMs != null) {
+        return resolveSourceRange(clips, result.mediaAssetId, result.sourceRepeatedStartMs, result.sourceRepeatedEndMs);
+      }
+      const clip = clipById.get(result.clipId);
+      if (!clip) return null;
+      return {
+        clip,
+        localStartMs: result.repeatedStartMs - clip.startMs,
+        localEndMs: result.repeatedEndMs - clip.startMs,
+        timelineStartMs: result.repeatedStartMs,
+        timelineEndMs: result.repeatedEndMs,
+      };
+    },
+    [clips, clipById],
+  );
+
   function dismiss(result: RepetitionResult) {
     setResults((prev) => prev.map((r) => (r.id === result.id ? { ...r, status: "DISMISSED" } : r)));
     markVoiceScanResult(projectId, job!.id, result.id, { status: "DISMISSED" }).catch(() => undefined);
   }
 
   function applyOne(result: RepetitionResult, mode: CorrectionMode) {
-    const clip = clipById.get(result.clipId);
-    if (!clip) {
-      setError("That clip no longer exists on the timeline — the timeline may have changed since this scan ran.");
+    // Locate the correction by where it sits in the SOURCE file rather than
+    // by the clip id and timeline position captured at scan time — those go
+    // stale as soon as anything is cut, split or moved, which is what made
+    // this report "That clip no longer exists on the timeline" even though
+    // the media was still right there. Older results (scanned before source
+    // offsets were recorded) fall back to the original clip lookup.
+    const target = resolveTarget(result);
+    if (!target) {
+      setError(
+        result.sourceRepeatedStartMs == null
+          ? "This result came from an older scan and can't be located after the timeline changed. Run a new scan and try again."
+          : "That part of the recording is no longer on the timeline — it looks like it was cut. Run a new scan and try again.",
+      );
       return;
     }
+    const { clip, localStartMs, localEndMs, timelineStartMs, timelineEndMs } = target;
+
     if (mode === "AUDIO_VIDEO_TRIM") {
-      const cutResult = removeRangeOnTrack(clips, result.trackId, () => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, result.repeatedStartMs, result.repeatedEndMs);
+      const cutResult = removeRangeOnTrack(clips, clip.trackId, () => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, timelineStartMs, timelineEndMs);
       if (!cutResult.ok) {
         setError(cutResult.message);
         return;
@@ -254,9 +287,7 @@ export default function VoiceCorrectionPanel({
       // result whose coordinates no longer fit (because the timeline was
       // edited after the scan) would otherwise be written anyway, get
       // rejected by the server, and then block every later autosave.
-      const localStart = result.repeatedStartMs - clip.startMs;
-      const localEnd = result.repeatedEndMs - clip.startMs;
-      const patched = addAudioPatch(clips, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id });
+      const patched = addAudioPatch(clips, clip.id, { startMs: localStartMs, endMs: localEndMs, repetitionResultId: result.id });
       if (!patched.ok) {
         setError(patched.message);
         return;
@@ -359,13 +390,38 @@ export default function VoiceCorrectionPanel({
       let skipped = 0;
 
       for (const result of highConfidence) {
-        const clip = nextClips.find((c) => c.id === result.clipId) as MediaClip | undefined;
-        if (!clip) {
+        // Re-resolve against the running `nextClips`, not the clips this
+        // batch started with — each applied correction can re-cut the track
+        // and shift everything after it.
+        const target =
+          result.sourceRepeatedStartMs != null && result.sourceRepeatedEndMs != null
+            ? resolveSourceRange(nextClips, result.mediaAssetId, result.sourceRepeatedStartMs, result.sourceRepeatedEndMs)
+            : (() => {
+                const clip = nextClips.find((c) => c.id === result.clipId) as MediaClip | undefined;
+                return clip
+                  ? {
+                      clip,
+                      localStartMs: result.repeatedStartMs - clip.startMs,
+                      localEndMs: result.repeatedEndMs - clip.startMs,
+                      timelineStartMs: result.repeatedStartMs,
+                      timelineEndMs: result.repeatedEndMs,
+                    }
+                  : null;
+              })();
+
+        if (!target) {
           skipped++;
           continue;
         }
+
         if (result.suggestedMode === "AUDIO_VIDEO_TRIM") {
-          const cutResult = removeRangeOnTrack(nextClips, result.trackId, () => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, result.repeatedStartMs, result.repeatedEndMs);
+          const cutResult = removeRangeOnTrack(
+            nextClips,
+            target.clip.trackId,
+            () => mediaById.get(target.clip.mediaAssetId)?.durationMs ?? 0,
+            target.timelineStartMs,
+            target.timelineEndMs,
+          );
           if (!cutResult.ok) {
             // Previously this silently skipped applying the fix but still
             // recorded it as "applied" below — the card would show as
@@ -375,9 +431,11 @@ export default function VoiceCorrectionPanel({
           }
           nextClips = cutResult.clips;
         } else {
-          const localStart = result.repeatedStartMs - clip.startMs;
-          const localEnd = result.repeatedEndMs - clip.startMs;
-          const patched = addAudioPatch(nextClips, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id });
+          const patched = addAudioPatch(nextClips, target.clip.id, {
+            startMs: target.localStartMs,
+            endMs: target.localEndMs,
+            repetitionResultId: result.id,
+          });
           if (!patched.ok) {
             skipped++;
             continue;

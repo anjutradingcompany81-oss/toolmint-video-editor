@@ -15,6 +15,7 @@ import {
   duplicateClip,
   moveClip,
   removeRangeOnTrack,
+  resolveSourceRange,
   rippleDeleteClip,
   splitClip,
   trimClipOnTrack,
@@ -170,6 +171,67 @@ describe("composition stays server-valid through realistic edit sequences", () =
     if (!result.ok) return;
     expect((result.clips[0] as MediaClip).audioPatches[0].endMs).toBe(30_000);
     expect(serverRejections(result.clips)).toEqual([]);
+  });
+
+  it("locates a correction by source offset after the clip was split into new ids", () => {
+    // Reproduces the reported "That clip no longer exists on the timeline":
+    // splitting mints brand-new clip ids, so a result recorded against the
+    // original id is orphaned. Source offsets survive it.
+    const original = baseClip({ id: "clip_main" });
+    const [a, b] = splitClip(original, SOURCE_MS, 120_000)!;
+    const clips: Clip[] = [a, b];
+    expect(clips.map((c) => c.id)).not.toContain("clip_main"); // ids really did change
+
+    // A repetition found at 2:26 of the source file (146,480ms).
+    const target = resolveSourceRange(clips, "asset", 146_480, 148_000);
+    expect(target).not.toBeNull();
+    expect(target!.clip.id).toBe(b.id); // lives in the second half now
+    expect(target!.localStartMs).toBe(146_480 - b.trimInMs);
+    expect(target!.timelineStartMs).toBe(b.startMs + (146_480 - b.trimInMs));
+  });
+
+  it("still locates a correction after the clip is moved and the earlier part cut away", () => {
+    let clips: Clip[] = [baseClip({ id: "clip_main" })];
+    const cut = removeRangeOnTrack(clips, TRACK, sourceDurationOf, 0, 60_000);
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    clips = cut.clips;
+    clips = moveClip(clips, clips[0].id, 30_000);
+
+    // Source 2:26 is still present (only 0-60s of source was removed).
+    const target = resolveSourceRange(clips, "asset", 146_480, 148_000);
+    expect(target).not.toBeNull();
+    const patchResult = addAudioPatch(clips, target!.clip.id, { startMs: target!.localStartMs, endMs: target!.localEndMs });
+    expect(patchResult.ok).toBe(true);
+    if (!patchResult.ok) return;
+    expect(serverRejections(patchResult.clips)).toEqual([]);
+  });
+
+  it("returns null when the correction's audio really was cut out", () => {
+    let clips: Clip[] = [baseClip({ id: "clip_main" })];
+    // Remove the stretch of source containing 2:26.
+    const cut = removeRangeOnTrack(clips, TRACK, sourceDurationOf, 140_000, 160_000);
+    expect(cut.ok).toBe(true);
+    if (!cut.ok) return;
+    clips = cut.clips;
+    expect(resolveSourceRange(clips, "asset", 146_480, 148_000)).toBeNull();
+  });
+
+  it("picks the half holding most of the range when a split straddles it", () => {
+    const [a, b] = splitClip(baseClip({ id: "clip_main" }), SOURCE_MS, 100_000)!;
+    const clips: Clip[] = [a, b];
+    // Range 99,000-101,000 straddles the split at source 100,000; 1,000ms
+    // falls in each half, so either is acceptable, but it must resolve and
+    // stay inside whichever clip it picks.
+    const target = resolveSourceRange(clips, "asset", 99_000, 101_000);
+    expect(target).not.toBeNull();
+    expect(target!.localStartMs).toBeGreaterThanOrEqual(0);
+    expect(target!.localEndMs).toBeLessThanOrEqual(target!.clip.durationMs);
+  });
+
+  it("ignores clips built from a different source file", () => {
+    const clips: Clip[] = [baseClip({ id: "other", mediaAssetId: "different-asset" })];
+    expect(resolveSourceRange(clips, "asset", 146_480, 148_000)).toBeNull();
   });
 
   it("cutting a marked range leaves a valid, gapless track", () => {

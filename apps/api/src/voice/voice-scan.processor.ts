@@ -184,6 +184,12 @@ export class VoiceScanProcessor implements OnModuleDestroy {
             originalEndMs: c.original.endMs,
             repeatedStartMs: c.repeated.startMs,
             repeatedEndMs: c.repeated.endMs,
+            // Source-relative copies — the only coordinates that stay valid
+            // once the user edits the timeline. See the schema comment.
+            sourceOriginalStartMs: c.original.sourceStartMs,
+            sourceOriginalEndMs: c.original.sourceEndMs,
+            sourceRepeatedStartMs: c.repeated.sourceStartMs,
+            sourceRepeatedEndMs: c.repeated.sourceEndMs,
             originalText: c.original.text,
             repeatedText: c.repeated.text,
             speakerLabel: c.repeated.speakerLabel ?? null,
