@@ -42,6 +42,15 @@ function buildClip(overrides: Partial<MediaClip> = {}): MediaClip {
 const SOURCE_MS = 10_000;
 const sourceDurationOf = () => SOURCE_MS;
 
+// addAudioPatch validates and can refuse (see composition-invariants.test.ts
+// for the refusal cases). These tests all use ranges that are meant to
+// apply cleanly, so unwrap here and fail loudly if one unexpectedly doesn't.
+function patched(clips: MediaClip[] | ReturnType<typeof buildClip>[], clipId: string, patch: { startMs: number; endMs: number }): MediaClip[] {
+  const result = addAudioPatch(clips, clipId, patch);
+  if (!result.ok) throw new Error(`expected the patch to apply, but: ${result.message}`);
+  return result.clips as MediaClip[];
+}
+
 describe("newVideoClip", () => {
   it("starts untrimmed, full volume, unmuted, at the given position", () => {
     const clip = newVideoClip(TRACK_A, "asset_1", 5000, SOURCE_MS);
@@ -220,17 +229,17 @@ describe("removeRangeOnTrack", () => {
 describe("addAudioPatch / removeAudioPatch", () => {
   it("adds a patch to the named clip only", () => {
     const other = buildClip({ id: "other", trackId: TRACK_B });
-    const result = addAudioPatch([buildClip({ id: "a" }), other], "a", { startMs: 1000, endMs: 2000 });
-    const patched = result.find((c) => c.id === "a") as MediaClip;
-    expect(patched.audioPatches).toHaveLength(1);
-    expect(patched.audioPatches[0]).toMatchObject({ startMs: 1000, endMs: 2000 });
-    expect(patched.audioPatches[0].id).toBeTruthy();
+    const result = patched([buildClip({ id: "a" }), other], "a", { startMs: 1000, endMs: 2000 });
+    const target = result.find((c) => c.id === "a") as MediaClip;
+    expect(target.audioPatches).toHaveLength(1);
+    expect(target.audioPatches[0]).toMatchObject({ startMs: 1000, endMs: 2000 });
+    expect(target.audioPatches[0].id).toBeTruthy();
     expect((result.find((c) => c.id === "other") as MediaClip).audioPatches).toHaveLength(0);
   });
 
   it("removes a patch by id, leaving others untouched", () => {
-    const withPatches = addAudioPatch([buildClip({ id: "a" })], "a", { startMs: 1000, endMs: 2000 });
-    const withTwo = addAudioPatch(withPatches, "a", { startMs: 5000, endMs: 5500 });
+    const withPatches = patched([buildClip({ id: "a" })], "a", { startMs: 1000, endMs: 2000 });
+    const withTwo = patched(withPatches, "a", { startMs: 5000, endMs: 5500 });
     const patchIdToRemove = (withTwo[0] as MediaClip).audioPatches[0].id;
     const result = removeAudioPatch(withTwo, "a", patchIdToRemove);
     expect((result[0] as MediaClip).audioPatches).toHaveLength(1);
@@ -240,7 +249,7 @@ describe("addAudioPatch / removeAudioPatch", () => {
 
 describe("audio patches survive trim/split by remapping to the new clip window", () => {
   it("splitClip keeps a patch entirely in the first half at the same offset", () => {
-    const withPatch = addAudioPatch([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 1000, endMs: 1500 });
+    const withPatch = patched([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 1000, endMs: 1500 });
     const clip = withPatch[0] as MediaClip;
     const [first, second] = splitClip(clip, SOURCE_MS, 4000)!;
     expect(first.audioPatches).toEqual([expect.objectContaining({ startMs: 1000, endMs: 1500 })]);
@@ -248,7 +257,7 @@ describe("audio patches survive trim/split by remapping to the new clip window",
   });
 
   it("splitClip shifts a patch entirely in the second half to be relative to the new clip", () => {
-    const withPatch = addAudioPatch([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 6000, endMs: 6500 });
+    const withPatch = patched([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 6000, endMs: 6500 });
     const clip = withPatch[0] as MediaClip;
     const [first, second] = splitClip(clip, SOURCE_MS, 4000)!;
     expect(first.audioPatches).toHaveLength(0);
@@ -256,7 +265,7 @@ describe("audio patches survive trim/split by remapping to the new clip window",
   });
 
   it("splitClip clamps a patch that straddles the split point to each new clip's own bounds, never dropping the correction entirely", () => {
-    const withPatch = addAudioPatch([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 3800, endMs: 4200 });
+    const withPatch = patched([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 3800, endMs: 4200 });
     const clip = withPatch[0] as MediaClip;
     const [first, second] = splitClip(clip, SOURCE_MS, 4000)!;
     expect(first.audioPatches).toEqual([expect.objectContaining({ startMs: 3800, endMs: 4000 })]);
@@ -266,7 +275,7 @@ describe("audio patches survive trim/split by remapping to the new clip window",
   it("removeRangeOnTrack remaps a surviving patch when the clip is trimmed from the front", () => {
     // Clip [0,10000), existing patch at [8000,8500). Cut [0,4000) trims the clip's front off,
     // so everything shifts left by 4000 in the new clip's own local coordinates.
-    const withPatch = addAudioPatch([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 8000, endMs: 8500 });
+    const withPatch = patched([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 8000, endMs: 8500 });
     const result = removeRangeOnTrack(withPatch, TRACK_A, sourceDurationOf, 0, 4000);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -274,7 +283,7 @@ describe("audio patches survive trim/split by remapping to the new clip window",
   });
 
   it("removeRangeOnTrack drops a patch that falls inside the removed range", () => {
-    const withPatch = addAudioPatch([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 2000, endMs: 2500 });
+    const withPatch = patched([buildClip({ startMs: 0, durationMs: 10_000 })], "clip", { startMs: 2000, endMs: 2500 });
     const result = removeRangeOnTrack(withPatch, TRACK_A, sourceDurationOf, 1000, 3000);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -399,13 +408,13 @@ describe("trimClipOnTrack", () => {
   it("shifts audio patches with the new local zero when trimming from the start", () => {
     // Patch at local [5000,5500). Trimming 2000 off the front moves local
     // zero forward by 2000, so the patch must land at [3000,3500).
-    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 5000, endMs: 5500 });
+    const withPatch = patched([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 5000, endMs: 5500 });
     const next = trimClipOnTrack(withPatch, "a", SOURCE_MS, 2000, 0)[0] as MediaClip;
     expect(next.audioPatches).toEqual([expect.objectContaining({ startMs: 3000, endMs: 3500 })]);
   });
 
   it("drops an audio patch that the trim removed entirely", () => {
-    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 500, endMs: 1000 });
+    const withPatch = patched([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 500, endMs: 1000 });
     const next = trimClipOnTrack(withPatch, "a", SOURCE_MS, 2000, 0)[0] as MediaClip;
     expect(next.audioPatches).toHaveLength(0);
   });
@@ -457,7 +466,7 @@ describe("duplicateClip", () => {
   });
 
   it("gives the copy's audio patches fresh ids so undoing one correction can't affect both clips", () => {
-    const withPatch = addAudioPatch([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 1000, endMs: 1500 });
+    const withPatch = patched([buildClip({ id: "a", startMs: 0, durationMs: 10_000 })], "a", { startMs: 1000, endMs: 1500 });
     const next = duplicateClip(withPatch, "a");
     const original = next.find((c) => c.id === "a") as MediaClip;
     const copy = next.find((c) => c.id !== "a") as MediaClip;

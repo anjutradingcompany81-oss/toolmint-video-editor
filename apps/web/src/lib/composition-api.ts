@@ -147,17 +147,39 @@ function remapAudioPatches(patches: AudioPatch[], windowStartMs: number, windowE
   return result;
 }
 
+export type AddPatchResult = { ok: true; clips: Clip[] } | { ok: false; message: string };
+
 // Adds one room-tone patch to a specific clip (AI Repetitive Voice
-// Remover's "audio-only correction" / "Replace with Room Tone"). The
-// clip must not already have an overlapping patch in that range — callers
-// only ever pass ranges derived from a fresh scan result, which by
-// construction can't already be patched.
-export function addAudioPatch(clips: Clip[], clipId: string, patch: Omit<AudioPatch, "id">): Clip[] {
-  return clips.map((c) => {
-    if (c.id !== clipId || c.kind === "text") return c;
-    const next = [...c.audioPatches, { ...patch, id: randomId("patch") }].sort((a, b) => a.startMs - b.startMs);
-    return { ...c, audioPatches: next };
-  });
+// Remover's "audio-only correction" / "Replace with Room Tone").
+//
+// This used to assume the caller's range was always valid, "since it comes
+// from a fresh scan result". That assumption breaks the moment the user
+// edits the timeline after scanning: a result's coordinates are captured
+// at scan time, so once a clip has been trimmed, split or moved they can
+// land past the clip's end or on top of an existing patch. The composition
+// schema rejects both, so the write turned into a silent 400 — and because
+// the bad patch stayed in local state, *every later autosave failed too*,
+// surfacing only as a permanent "Couldn't save" with no indication of why.
+// It now validates and reports instead, so a stale correction fails loudly
+// and by itself.
+export function addAudioPatch(clips: Clip[], clipId: string, patch: Omit<AudioPatch, "id">): AddPatchResult {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip || clip.kind === "text") return { ok: false, message: "That clip is no longer on the timeline." };
+
+  const startMs = Math.max(0, Math.round(patch.startMs));
+  const endMs = Math.min(clip.durationMs, Math.round(patch.endMs));
+  if (endMs - startMs < MIN_PATCH_DURATION_MS) {
+    return {
+      ok: false,
+      message: "This correction points at part of the clip that no longer exists — the timeline changed after the scan. Run a new scan and try again.",
+    };
+  }
+  if (clip.audioPatches.some((p) => startMs < p.endMs && endMs > p.startMs)) {
+    return { ok: false, message: "That part of the clip has already been corrected." };
+  }
+
+  const next = [...clip.audioPatches, { ...patch, startMs, endMs, id: randomId("patch") }].sort((a, b) => a.startMs - b.startMs);
+  return { ok: true, clips: clips.map((c) => (c.id === clipId && c.kind !== "text" ? { ...c, audioPatches: next } : c)) };
 }
 
 // Removes a previously-applied patch (AI Repetitive Voice Remover's

@@ -250,9 +250,18 @@ export default function VoiceCorrectionPanel({
       }
       withClips(() => cutResult.clips);
     } else {
+      // Validate against the CURRENT clip before touching editor state: a
+      // result whose coordinates no longer fit (because the timeline was
+      // edited after the scan) would otherwise be written anyway, get
+      // rejected by the server, and then block every later autosave.
       const localStart = result.repeatedStartMs - clip.startMs;
       const localEnd = result.repeatedEndMs - clip.startMs;
-      withClips((prev) => addAudioPatch(prev, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id }));
+      const patched = addAudioPatch(clips, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id });
+      if (!patched.ok) {
+        setError(patched.message);
+        return;
+      }
+      withClips(() => patched.clips);
     }
     setResults((prev) => prev.map((r) => (r.id === result.id ? { ...r, status: "APPLIED", appliedMode: mode } : r)));
     markVoiceScanResult(projectId, job!.id, result.id, { status: "APPLIED", appliedMode: mode }).catch(() => undefined);
@@ -368,7 +377,12 @@ export default function VoiceCorrectionPanel({
         } else {
           const localStart = result.repeatedStartMs - clip.startMs;
           const localEnd = result.repeatedEndMs - clip.startMs;
-          nextClips = addAudioPatch(nextClips, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id });
+          const patched = addAudioPatch(nextClips, clip.id, { startMs: localStart, endMs: localEnd, repetitionResultId: result.id });
+          if (!patched.ok) {
+            skipped++;
+            continue;
+          }
+          nextClips = patched.clips;
         }
         applied.push({ id: result.id, appliedMode: result.suggestedMode });
       }
