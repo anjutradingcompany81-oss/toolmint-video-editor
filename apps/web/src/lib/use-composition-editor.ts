@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "./api-client";
 import { getProject, type Project } from "./projects-api";
-import { getComposition, saveComposition, newVideoTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
+import { getComposition, saveComposition, newVideoTrack, newOverlayTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
 
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
 
@@ -33,6 +33,13 @@ export function useCompositionEditor(projectId: string) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [trackId, setTrackId] = useState<string | null>(null);
   const [clips, setClips] = useState<MediaClip[]>([]);
+  // The overlay track carries logo/watermark clips. It's kept separate from
+  // the video track rather than folded into `clips` because the two obey
+  // different rules: overlays composite *on top of* video and may sit
+  // anywhere (including over a gap), so none of the video track's
+  // adjacency/ripple logic should apply to them.
+  const [overlayTrackId, setOverlayTrackId] = useState<string | null>(null);
+  const [overlayClips, setOverlayClips] = useState<MediaClip[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -43,15 +50,23 @@ export function useCompositionEditor(projectId: string) {
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clipsRef = useRef(clips);
+  const overlayClipsRef = useRef(overlayClips);
   const timelineRef = useRef(timeline);
   const trackIdRef = useRef(trackId);
+  const overlayTrackIdRef = useRef(overlayTrackId);
   useEffect(() => {
     clipsRef.current = clips;
+    overlayClipsRef.current = overlayClips;
     timelineRef.current = timeline;
     trackIdRef.current = trackId;
-  }, [clips, timeline, trackId]);
+    overlayTrackIdRef.current = overlayTrackId;
+  }, [clips, overlayClips, timeline, trackId, overlayTrackId]);
 
-  const history = useRef<{ past: MediaClip[][]; future: MediaClip[][] }>({ past: [], future: [] });
+  // Undo snapshots BOTH tracks together, so undoing a logo placement can't
+  // leave the video track from a different point in history (and vice
+  // versa) — §36 requires undo to cover logo placement as well as cuts.
+  type Snapshot = { video: MediaClip[]; overlay: MediaClip[] };
+  const history = useRef<{ past: Snapshot[]; future: Snapshot[] }>({ past: [], future: [] });
   const lastEditAt = useRef(0);
 
   function syncHistoryFlags() {
@@ -85,10 +100,17 @@ export function useCompositionEditor(projectId: string) {
           loadedTimeline = { ...loadedTimeline, tracks: [...loadedTimeline.tracks, videoTrack] };
         }
 
+        // The overlay track is created lazily — only projects that actually
+        // use a logo need one, and adding an empty track to every project
+        // would just be noise in the saved composition.
+        const overlayTrack = loadedTimeline.tracks.find((t) => t.kind === "overlay") ?? null;
+
         setProject(proj);
         setTimeline(loadedTimeline);
         setTrackId(videoTrack.id);
         setClips(clipsOnTrack(loadedTimeline.clips, videoTrack.id));
+        setOverlayTrackId(overlayTrack?.id ?? null);
+        setOverlayClips(overlayTrack ? clipsOnTrack(loadedTimeline.clips, overlayTrack.id) : []);
         resetHistory();
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof ApiError ? err.message : "Couldn't load the editor.");
@@ -110,8 +132,12 @@ export function useCompositionEditor(projectId: string) {
     };
   }, []);
 
+  // `extraTracks` lets a caller add a track (currently the lazily-created
+  // overlay track) in the same save that first uses it, so the clip and the
+  // track it references can never be persisted out of step — a clip whose
+  // trackId doesn't exist is rejected by the schema.
   const scheduleSave = useCallback(
-    (nextClips: MediaClip[]) => {
+    (nextClips: MediaClip[], nextOverlayClips: MediaClip[], extraTracks: Track[] = []) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
@@ -121,10 +147,18 @@ export function useCompositionEditor(projectId: string) {
         setSaveStatus("saving");
         setSaveError(null);
         try {
-          // Merge this track's edited clips back into the full clip list —
-          // clips on any other track are carried through unchanged.
-          const otherClips = current.clips.filter((c) => c.trackId !== currentTrackId);
-          const payload: Timeline = { ...current, clips: [...otherClips, ...nextClips], updatedAt: new Date().toISOString() };
+          // Merge both managed tracks back into the full clip list — clips
+          // on any track this editor doesn't manage are carried through
+          // unchanged.
+          const managedTrackIds = new Set([currentTrackId, overlayTrackIdRef.current].filter(Boolean) as string[]);
+          const otherClips = current.clips.filter((c) => !managedTrackIds.has(c.trackId));
+          const tracks = [...current.tracks, ...extraTracks.filter((t) => !current.tracks.some((existing) => existing.id === t.id))];
+          const payload: Timeline = {
+            ...current,
+            tracks,
+            clips: [...otherClips, ...nextClips, ...nextOverlayClips],
+            updatedAt: new Date().toISOString(),
+          };
           const env = await saveComposition(projectId, payload);
           setTimeline(env.composition);
           setSaveStatus("saved");
@@ -136,6 +170,17 @@ export function useCompositionEditor(projectId: string) {
     },
     [projectId],
   );
+
+  function pushHistory() {
+    const now = Date.now();
+    if (now - lastEditAt.current > HISTORY_COALESCE_MS) {
+      history.current.past.push({ video: clipsRef.current, overlay: overlayClipsRef.current });
+      if (history.current.past.length > HISTORY_LIMIT) history.current.past.shift();
+      history.current.future = [];
+    }
+    lastEditAt.current = now;
+    syncHistoryFlags();
+  }
 
   function withClips(mutate: (prev: MediaClip[]) => Clip[]) {
     const currentTrackId = trackIdRef.current;
@@ -158,41 +203,79 @@ export function useCompositionEditor(projectId: string) {
     // narrowing is safe — it exists to satisfy the Clip union type without
     // scattering `as MediaClip` casts through every call site below.
     const nextClips = mutated.filter((c): c is MediaClip => c.trackId === currentTrackId && c.kind !== "text").sort((a, b) => a.startMs - b.startMs);
-    const now = Date.now();
 
-    if (now - lastEditAt.current > HISTORY_COALESCE_MS) {
-      history.current.past.push(prevClips);
-      if (history.current.past.length > HISTORY_LIMIT) history.current.past.shift();
-      history.current.future = [];
-    }
-    lastEditAt.current = now;
-    syncHistoryFlags();
-
+    pushHistory();
     setClips(nextClips);
-    scheduleSave(nextClips);
+    scheduleSave(nextClips, overlayClipsRef.current);
+  }
+
+  // Mutates the overlay (logo/watermark) track, creating it on first use.
+  // Overlay clips never repack or ripple — a watermark sits wherever it was
+  // placed, independent of what happens on the video track.
+  function withOverlayClips(mutate: (prev: MediaClip[], overlayTrackId: string) => MediaClip[]) {
+    const current = timelineRef.current;
+    if (!current) return;
+
+    const existingTrackId = overlayTrackIdRef.current;
+    const newTracks: Track[] = [];
+    let targetTrackId: string;
+    if (existingTrackId) {
+      targetTrackId = existingTrackId;
+    } else {
+      const highestOrder = current.tracks.reduce((max, t) => Math.max(max, t.order), 0);
+      const track = newOverlayTrack("Logo", highestOrder + 1);
+      targetTrackId = track.id;
+      newTracks.push(track);
+      setOverlayTrackId(track.id);
+      overlayTrackIdRef.current = track.id;
+    }
+
+    const next = mutate(overlayClipsRef.current, targetTrackId).sort((a, b) => a.startMs - b.startMs);
+    pushHistory();
+    setOverlayClips(next);
+    scheduleSave(clipsRef.current, next, newTracks);
   }
 
   function undo() {
     if (history.current.past.length === 0) return;
     const prev = history.current.past.pop()!;
-    history.current.future.push(clipsRef.current);
+    history.current.future.push({ video: clipsRef.current, overlay: overlayClipsRef.current });
     lastEditAt.current = 0; // next edit always starts a fresh entry, never coalesces across an undo
     syncHistoryFlags();
-    setClips(prev);
-    scheduleSave(prev);
+    setClips(prev.video);
+    setOverlayClips(prev.overlay);
+    scheduleSave(prev.video, prev.overlay);
   }
 
   function redo() {
     if (history.current.future.length === 0) return;
     const next = history.current.future.pop()!;
-    history.current.past.push(clipsRef.current);
+    history.current.past.push({ video: clipsRef.current, overlay: overlayClipsRef.current });
     lastEditAt.current = 0;
     syncHistoryFlags();
-    setClips(next);
-    scheduleSave(next);
+    setClips(next.video);
+    setOverlayClips(next.overlay);
+    scheduleSave(next.video, next.overlay);
   }
 
-  return { project, timeline, trackId, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo };
+  return {
+    project,
+    timeline,
+    trackId,
+    clips,
+    overlayTrackId,
+    overlayClips,
+    withOverlayClips,
+    loading,
+    loadError,
+    saveStatus,
+    saveError,
+    withClips,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  };
 }
 
 function clipsOnTrack(clips: Clip[], trackId: string): MediaClip[] {

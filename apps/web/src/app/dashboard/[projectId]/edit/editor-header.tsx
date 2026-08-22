@@ -20,6 +20,8 @@ interface EditorHeaderProps {
   exportDisabled: boolean;
   onToggleVoiceCorrection: () => void;
   voiceCorrectionOpen: boolean;
+  onToggleLogo: () => void;
+  logoOpen: boolean;
 }
 
 export default function EditorHeader({
@@ -34,6 +36,8 @@ export default function EditorHeader({
   exportDisabled,
   onToggleVoiceCorrection,
   voiceCorrectionOpen,
+  onToggleLogo,
+  logoOpen,
 }: EditorHeaderProps) {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -75,6 +79,17 @@ export default function EditorHeader({
       <SaveIndicator status={saveStatus} error={saveError} />
 
       <div className="ml-auto flex items-center gap-3">
+        <button
+          onClick={onToggleLogo}
+          aria-pressed={logoOpen}
+          title="Add a logo or watermark over the video"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+            logoOpen ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          Logo
+        </button>
+
         <button
           onClick={onToggleVoiceCorrection}
           aria-pressed={voiceCorrectionOpen}

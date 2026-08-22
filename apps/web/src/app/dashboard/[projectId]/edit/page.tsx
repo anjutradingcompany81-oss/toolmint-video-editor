@@ -23,6 +23,7 @@ import TimelinePanel, { MAX_PPS, MIN_PPS } from "./timeline-panel";
 import PropertiesPanel from "./properties-panel";
 import ExportModal from "./export-modal";
 import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel";
+import LogoPanel from "./logo-panel";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -51,8 +52,22 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const { projectId } = use(params);
   const { status } = useRequireAuth();
 
-  const { project, trackId, clips, loading, loadError, saveStatus, saveError, withClips, undo, redo, canUndo, canRedo } =
-    useCompositionEditor(projectId);
+  const {
+    project,
+    trackId,
+    clips,
+    overlayClips,
+    withOverlayClips,
+    loading,
+    loadError,
+    saveStatus,
+    saveError,
+    withClips,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useCompositionEditor(projectId);
 
   const [media, setMedia] = useState<MediaAsset[]>([]);
   const [mediaLoaded, setMediaLoaded] = useState(false);
@@ -67,6 +82,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [razorMode, setRazorMode] = useState(false);
   const [message, setMessage] = useState<EditorMessage | null>(null);
   const [voiceCorrectionOpen, setVoiceCorrectionOpen] = useState(false);
+  const [logoOpen, setLogoOpen] = useState(false);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
@@ -118,6 +134,13 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   // with a later startMs isn't guaranteed to also have the later *end*
   // once clips can leave gaps or (on a different track) run concurrently.
   const totalDurationMs = layout.reduce((max, e) => Math.max(max, e.startMs + e.durationMs), 0);
+
+  // The render canvas takes its shape from the first video clip's source
+  // (see computeDimensions in merge-ffmpeg.util.ts). Mirroring that here
+  // means the logo position previewed in the Logo panel is computed against
+  // the same frame the export will actually use.
+  const canvasWidth = layout[0]?.asset?.width ?? 1920;
+  const canvasHeight = layout[0]?.asset?.height ?? 1080;
 
   const player = useTimelinePlayer(layout, totalDurationMs);
   const activeEntry = useMemo(() => {
@@ -456,6 +479,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         exportDisabled={clips.length === 0}
         onToggleVoiceCorrection={() => setVoiceCorrectionOpen((v) => !v)}
         voiceCorrectionOpen={voiceCorrectionOpen}
+        onToggleLogo={() => setLogoOpen((v) => !v)}
+        logoOpen={logoOpen}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -517,6 +542,18 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onDelete={() => selectedClipId && deleteClip(selectedClipId)}
           onRippleDelete={() => selectedClipId && rippleDelete(selectedClipId)}
           onDuplicate={() => selectedClipId && duplicateSelected(selectedClipId)}
+        />
+
+        <LogoPanel
+          open={logoOpen}
+          onClose={() => setLogoOpen(false)}
+          images={media.filter((m) => m.kind === "IMAGE" && m.status === "READY")}
+          overlayClips={overlayClips}
+          mediaById={mediaById}
+          projectWidth={canvasWidth}
+          projectHeight={canvasHeight}
+          totalDurationMs={totalDurationMs}
+          withOverlayClips={withOverlayClips}
         />
 
         <VoiceCorrectionPanel

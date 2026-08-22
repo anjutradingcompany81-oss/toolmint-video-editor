@@ -75,6 +75,10 @@ export interface VisualClipSegment {
   sourceWidth: number;
   sourceHeight: number;
   transform: Transform;
+  // A still image (e.g. a logo) decodes to exactly one frame, so without
+  // `-loop 1` bounded by `-t` it would appear for a single frame instead of
+  // its clip's whole span. Absent/false for time-based sources.
+  isStillImage?: boolean;
 }
 
 // AI Repetitive Voice Remover, "audio-only correction": a sub-range of
@@ -223,6 +227,8 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
 
   const visualInputIndex: number[] = [];
   for (const clip of plan.visualClips) {
+    // Input-level flags must come BEFORE the -i they apply to.
+    if (clip.isStillImage) args.push("-loop", "1", "-t", sec(clip.durationMs));
     args.push("-i", clip.localPath);
     visualInputIndex.push(nextInput++);
   }

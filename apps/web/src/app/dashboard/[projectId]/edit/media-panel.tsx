@@ -84,7 +84,7 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
             ref={inputRef}
             type="file"
             multiple
-            accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/avi,.mp4,.mov,.webm,.mkv,.avi"
+            accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/avi,.mp4,.mov,.webm,.mkv,.avi,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp,audio/mpeg,audio/wav,audio/aac,audio/mp4,audio/ogg,.mp3,.wav,.aac,.m4a,.ogg"
             className="hidden"
             onChange={(e) => {
               if (e.target.files?.length) uploadFiles(e.target.files);
@@ -92,8 +92,8 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
             }}
           />
           <PlusIcon className="text-brand" />
-          <p className="text-sm font-medium">Upload video</p>
-          <p className="text-xs text-ink-muted">Drop files, or click to browse — MP4, MOV, WebM, AVI, MKV</p>
+          <p className="text-sm font-medium">Upload media</p>
+          <p className="text-xs text-ink-muted">Drop files, or click to browse — video (MP4, MOV, WebM, AVI, MKV), images for a logo (PNG, JPG, WebP), or audio (MP3, WAV, AAC, M4A)</p>
         </div>
 
         {tasks.length > 0 && (
@@ -133,13 +133,21 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
                 </div>
                 {asset.status === "FAILED" && <p className="text-xs text-danger">Couldn&apos;t process this file.</p>}
                 <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                  <button
-                    onClick={() => onAddToTimeline(asset.id)}
-                    disabled={asset.status !== "READY"}
-                    className="flex items-center gap-1 rounded-md bg-brand px-2 py-1 text-xs font-medium text-ink hover:bg-brand/90 disabled:opacity-40"
-                  >
-                    <PlusIcon width={12} height={12} /> Add to timeline
-                  </button>
+                  {asset.kind === "IMAGE" ? (
+                    // Images aren't video-track clips — they're placed as a
+                    // logo/watermark overlay, which needs position, size and
+                    // opacity, so they're added from the Logo panel instead
+                    // of dropped straight onto the timeline.
+                    <span className="text-xs text-ink-muted">Use the Logo button to place this</span>
+                  ) : (
+                    <button
+                      onClick={() => onAddToTimeline(asset.id)}
+                      disabled={asset.status !== "READY"}
+                      className="flex items-center gap-1 rounded-md bg-brand px-2 py-1 text-xs font-medium text-ink hover:bg-brand/90 disabled:opacity-40"
+                    >
+                      <PlusIcon width={12} height={12} /> Add to timeline
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDelete(asset)}
                     disabled={busyId === asset.id}

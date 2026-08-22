@@ -147,6 +147,33 @@ describe("buildMultitrackMergeArgs", () => {
     expect(filter).toContain("colorchannelmixer=aa=0.500");
   });
 
+  it("loops a still image across its clip's whole span instead of a single frame", () => {
+    const args = buildMultitrackMergeArgs({
+      ...BASE_PLAN,
+      visualClips: [
+        buildVisual({ kind: "video" }),
+        buildVisual({ kind: "overlay", trackOrder: 1, isStillImage: true, startMs: 0, durationMs: 12_000, localPath: "/tmp/logo.png" }),
+      ],
+      audioClips: [],
+    });
+    const logoInput = args.indexOf("/tmp/logo.png");
+    expect(logoInput).toBeGreaterThan(-1);
+    // Input options only apply to the -i that FOLLOWS them; ffmpeg silently
+    // ignores them if they land after their input.
+    expect(args.slice(logoInput - 5, logoInput)).toEqual(["-loop", "1", "-t", "12.000", "-i"]);
+  });
+
+  it("does not loop a time-based source", () => {
+    const args = buildMultitrackMergeArgs({
+      ...BASE_PLAN,
+      visualClips: [buildVisual({ kind: "video", localPath: "/tmp/clip.mp4" })],
+      audioClips: [],
+    });
+    const idx = args.indexOf("/tmp/clip.mp4");
+    expect(args[idx - 1]).toBe("-i");
+    expect(args.slice(0, idx)).not.toContain("-loop");
+  });
+
   it("mixes the base silence alone when there are no audio clips", () => {
     const args = buildMultitrackMergeArgs({ ...BASE_PLAN, visualClips: [buildVisual()], audioClips: [] });
     const filter = args[args.indexOf("-filter_complex") + 1];

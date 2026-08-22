@@ -5,10 +5,12 @@ interface MediaKindRule {
   maxBytes: number;
 }
 
-// ProCut only merges video — MediaAssetKind still has IMAGE/AUDIO/DOCUMENT
-// (harmless to leave in the schema), but nothing in this rule set accepts
-// them, so resolveMediaKind() below rejects anything that isn't video with
-// a clear "unsupported file type" error rather than silently misfiling it.
+// IMAGE is accepted so a logo/watermark can be uploaded and composited as
+// an overlay-kind clip (the render pipeline already supports overlays with
+// their own position/scale/opacity — see merge-ffmpeg.util.ts). AUDIO is
+// accepted for music/voice-over beds on audio-kind tracks. Both are much
+// smaller than footage, so they get their own tighter size caps rather
+// than sharing video's 1GB allowance.
 export const MEDIA_RULES: Partial<Record<MediaAssetKind, MediaKindRule>> = {
   VIDEO: {
     mimeTypes: [
@@ -20,6 +22,16 @@ export const MEDIA_RULES: Partial<Record<MediaAssetKind, MediaKindRule>> = {
       "video/avi",
     ],
     maxBytes: 1024 * 1024 * 1024, // 1GB — large enough for real footage, still bounded
+  },
+  IMAGE: {
+    // PNG first: a logo almost always needs transparency, which the
+    // overlay filter honours via the yuva420p/colorchannelmixer chain.
+    mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+    maxBytes: 20 * 1024 * 1024,
+  },
+  AUDIO: {
+    mimeTypes: ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp4", "audio/ogg", "audio/webm"],
+    maxBytes: 200 * 1024 * 1024,
   },
 };
 

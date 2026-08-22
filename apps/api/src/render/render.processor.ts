@@ -6,7 +6,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { Job, Worker } from "bullmq";
 import type Redis from "ioredis";
 import ffmpegPath from "ffmpeg-static";
-import { ExportStatus, type MediaAsset } from "@prisma/client";
+import { ExportStatus, MediaAssetKind, type MediaAsset } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { compositionSchema, type Clip, type Track } from "../projects/composition.schema";
@@ -74,7 +74,12 @@ export class RenderProcessor implements OnModuleDestroy {
       for (const [index, assetId] of uniqueAssetIds.entries()) {
         const asset = assetById.get(assetId);
         if (!asset) throw new Error("A clip references media that no longer exists");
-        if (asset.durationMs == null) throw new Error(`"${asset.originalName}" couldn't be measured — try re-uploading it`);
+        // A still image has no intrinsic duration — how long it stays on
+        // screen comes from its clip, not the asset — so only time-based
+        // media has to have been measured.
+        if (asset.kind !== MediaAssetKind.IMAGE && asset.durationMs == null) {
+          throw new Error(`"${asset.originalName}" couldn't be measured — try re-uploading it`);
+        }
 
         const localPath = join(workDir, `asset${index}${extname(asset.storageKey) || ".bin"}`);
         await this.storage.downloadToFile(asset.storageKey, localPath);
@@ -106,6 +111,10 @@ export class RenderProcessor implements OnModuleDestroy {
             sourceWidth: asset.width ?? 0,
             sourceHeight: asset.height ?? 0,
             transform: clip.transform,
+            // A still decodes to a single frame unless ffmpeg is told to
+            // loop it, which would put the logo on screen for one frame
+            // instead of the clip's whole span.
+            isStillImage: asset.kind === MediaAssetKind.IMAGE,
           };
         });
 

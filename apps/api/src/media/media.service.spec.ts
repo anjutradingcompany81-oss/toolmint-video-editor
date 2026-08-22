@@ -94,11 +94,34 @@ describe("MediaService", () => {
       expect(storage.putObject).not.toHaveBeenCalled();
     });
 
-    it("rejects a non-video file type such as an image", async () => {
-      const file = buildFile({ mimetype: "image/png", originalname: "frame.png" });
+    // Images are accepted so a logo/watermark can be uploaded and placed as
+    // an overlay clip, and audio for music/voice-over beds. Only genuinely
+    // unsupported types (covered by the test above) are rejected.
+    it("accepts an image upload, files it as IMAGE, and skips the waveform pass", async () => {
+      probe.probe.mockResolvedValueOnce({ durationMs: null, width: 512, height: 512, hasAudio: false, waveformPeaks: null });
+      const file = buildFile({ mimetype: "image/png", originalname: "logo.png" });
 
-      await expect(service.upload("user_1", "proj_1", file)).rejects.toBeInstanceOf(BadRequestException);
-      expect(storage.putObject).not.toHaveBeenCalled();
+      await service.upload("user_1", "proj_1", file);
+
+      expect(storage.putObject).toHaveBeenCalledWith(expect.stringContaining("projects/proj_1/"), file.buffer, "image/png");
+      // An image can't have an audio track, so the waveform attempt is
+      // skipped rather than made and caught.
+      expect(probe.probe).toHaveBeenCalledWith(file.buffer, "png", false);
+      expect(prisma.mediaAsset.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ kind: MediaAssetKind.IMAGE }) }),
+      );
+    });
+
+    it("accepts an audio upload, files it as AUDIO, and still builds a waveform", async () => {
+      probe.probe.mockResolvedValueOnce({ durationMs: 30_000, width: null, height: null, hasAudio: true, waveformPeaks: [-0.2, 0.2] });
+      const file = buildFile({ mimetype: "audio/mpeg", originalname: "music.mp3" });
+
+      await service.upload("user_1", "proj_1", file);
+
+      expect(probe.probe).toHaveBeenCalledWith(file.buffer, "mp3", true);
+      expect(prisma.mediaAsset.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ kind: MediaAssetKind.AUDIO }) }),
+      );
     });
 
     it("rejects a video over the size limit", async () => {

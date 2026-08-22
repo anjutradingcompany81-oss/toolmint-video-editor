@@ -389,6 +389,70 @@ export function newVideoTrack(name: string, order: number): Track {
   return { id: randomId("track"), kind: "video", name, order, locked: false, hidden: false, muted: false, solo: false };
 }
 
+// Overlay tracks composite above video (higher `order` renders on top —
+// see merge-ffmpeg.util.ts's overlay chain), which is what a logo or
+// watermark needs.
+export function newOverlayTrack(name: string, order: number): Track {
+  return { id: randomId("track"), kind: "overlay", name, order, locked: false, hidden: false, muted: false, solo: false };
+}
+
+export type LogoCorner = "TOP_LEFT" | "TOP_RIGHT" | "BOTTOM_LEFT" | "BOTTOM_RIGHT" | "CUSTOM";
+
+// Pixel offset of a logo from the canvas edges, given the canvas and the
+// logo's own rendered size. The renderer's overlay filter takes absolute
+// x/y in canvas pixels, so a corner preset has to be resolved against the
+// actual dimensions rather than stored as a keyword.
+export function logoPosition(
+  corner: LogoCorner,
+  canvas: { width: number; height: number },
+  logo: { width: number; height: number },
+  marginPx: number,
+): { x: number; y: number } {
+  const maxX = Math.max(0, canvas.width - logo.width);
+  const maxY = Math.max(0, canvas.height - logo.height);
+  switch (corner) {
+    case "TOP_LEFT":
+      return { x: marginPx, y: marginPx };
+    case "TOP_RIGHT":
+      return { x: maxX - marginPx, y: marginPx };
+    case "BOTTOM_LEFT":
+      return { x: marginPx, y: maxY - marginPx };
+    case "BOTTOM_RIGHT":
+      return { x: maxX - marginPx, y: maxY - marginPx };
+    default:
+      return { x: marginPx, y: marginPx };
+  }
+}
+
+// A logo/watermark: an overlay-kind clip spanning a stretch of the
+// timeline. Images have no intrinsic duration, so the caller supplies how
+// long it should stay on screen (normally the whole project).
+export function newLogoClip(
+  trackId: string,
+  mediaAssetId: string,
+  startMs: number,
+  durationMs: number,
+  transform: Partial<Transform> = {},
+): MediaClip {
+  return {
+    id: randomId("clip"),
+    trackId,
+    kind: "overlay",
+    mediaAssetId,
+    startMs,
+    durationMs: Math.max(MIN_CLIP_DURATION_MS, durationMs),
+    trimInMs: 0,
+    trimOutMs: 0,
+    // An overlay contributes no sound; muting it keeps the audio mix from
+    // gaining a silent input for no reason.
+    volume: 0,
+    muted: true,
+    speedPercent: 100,
+    transform: { ...DEFAULT_TRANSFORM, ...transform },
+    audioPatches: [],
+  };
+}
+
 // Re-packs every clip on one track so they sit back-to-back with no gaps,
 // in ascending order of their *current* startMs — array order alone is no
 // longer authoritative once clips carry absolute positions, so ordering
