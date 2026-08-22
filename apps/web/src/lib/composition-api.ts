@@ -72,11 +72,43 @@ export interface TextClip extends BaseClip {
 
 export type Clip = MediaClip | TextClip;
 
+// One caption line, in timeline-absolute ms — the same coordinate space the
+// preview and renderer already use. Mirrors composition.schema.ts.
+export interface SubtitleCue {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface SubtitleStyle {
+  fontSizePx: number;
+  colorHex: string;
+  outlineHex: string;
+  position: "BOTTOM" | "TOP";
+  /** Off by default: SRT/VTT can be exported without altering the picture. */
+  burnIn: boolean;
+}
+
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
+  fontSizePx: 24,
+  colorHex: "#FFFFFF",
+  outlineHex: "#000000",
+  position: "BOTTOM",
+  burnIn: false,
+};
+
 export interface Timeline {
   schemaVersion: "2.0";
   tracks: Track[];
   clips: Clip[];
+  subtitles: SubtitleCue[];
+  subtitleStyle: SubtitleStyle;
   updatedAt: string;
+}
+
+export function newSubtitleCue(startMs: number, endMs: number, text: string): SubtitleCue {
+  return { id: randomId("cue"), startMs, endMs, text };
 }
 
 export interface TimelineEnvelope {

@@ -3,7 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "./api-client";
 import { getProject, type Project } from "./projects-api";
-import { getComposition, saveComposition, newVideoTrack, newOverlayTrack, type Clip, type MediaClip, type Timeline, type Track } from "./composition-api";
+import {
+  getComposition,
+  saveComposition,
+  newVideoTrack,
+  newOverlayTrack,
+  DEFAULT_SUBTITLE_STYLE,
+  type Clip,
+  type MediaClip,
+  type SubtitleCue,
+  type SubtitleStyle,
+  type Timeline,
+  type Track,
+} from "./composition-api";
 
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
 
@@ -40,6 +52,11 @@ export function useCompositionEditor(projectId: string) {
   // adjacency/ripple logic should apply to them.
   const [overlayTrackId, setOverlayTrackId] = useState<string | null>(null);
   const [overlayClips, setOverlayClips] = useState<MediaClip[]>([]);
+  // Captions live on the timeline (not as clips) because they're one
+  // ordered script the user edits as a whole, and because burn-in goes
+  // through ffmpeg's subtitles filter rather than the compositing path.
+  const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -54,13 +71,17 @@ export function useCompositionEditor(projectId: string) {
   const timelineRef = useRef(timeline);
   const trackIdRef = useRef(trackId);
   const overlayTrackIdRef = useRef(overlayTrackId);
+  const subtitlesRef = useRef(subtitles);
+  const subtitleStyleRef = useRef(subtitleStyle);
   useEffect(() => {
     clipsRef.current = clips;
     overlayClipsRef.current = overlayClips;
     timelineRef.current = timeline;
     trackIdRef.current = trackId;
     overlayTrackIdRef.current = overlayTrackId;
-  }, [clips, overlayClips, timeline, trackId, overlayTrackId]);
+    subtitlesRef.current = subtitles;
+    subtitleStyleRef.current = subtitleStyle;
+  }, [clips, overlayClips, timeline, trackId, overlayTrackId, subtitles, subtitleStyle]);
 
   // Undo snapshots BOTH tracks together, so undoing a logo placement can't
   // leave the video track from a different point in history (and vice
@@ -111,6 +132,9 @@ export function useCompositionEditor(projectId: string) {
         setClips(clipsOnTrack(loadedTimeline.clips, videoTrack.id));
         setOverlayTrackId(overlayTrack?.id ?? null);
         setOverlayClips(overlayTrack ? clipsOnTrack(loadedTimeline.clips, overlayTrack.id) : []);
+        // Projects saved before captions existed have neither field.
+        setSubtitles(loadedTimeline.subtitles ?? []);
+        setSubtitleStyle(loadedTimeline.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE);
         resetHistory();
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof ApiError ? err.message : "Couldn't load the editor.");
@@ -137,7 +161,12 @@ export function useCompositionEditor(projectId: string) {
   // track it references can never be persisted out of step — a clip whose
   // trackId doesn't exist is rejected by the schema.
   const scheduleSave = useCallback(
-    (nextClips: MediaClip[], nextOverlayClips: MediaClip[], extraTracks: Track[] = []) => {
+    (
+      nextClips: MediaClip[],
+      nextOverlayClips: MediaClip[],
+      extraTracks: Track[] = [],
+      captions?: { subtitles: SubtitleCue[]; subtitleStyle: SubtitleStyle },
+    ) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
@@ -157,6 +186,11 @@ export function useCompositionEditor(projectId: string) {
             ...current,
             tracks,
             clips: [...otherClips, ...nextClips, ...nextOverlayClips],
+            // Captions are only overwritten by an edit that actually
+            // changed them; every other save carries the current ones
+            // through so a clip edit can't wipe the script.
+            subtitles: captions?.subtitles ?? subtitlesRef.current,
+            subtitleStyle: captions?.subtitleStyle ?? subtitleStyleRef.current,
             updatedAt: new Date().toISOString(),
           };
           const env = await saveComposition(projectId, payload);
@@ -236,6 +270,18 @@ export function useCompositionEditor(projectId: string) {
     scheduleSave(clipsRef.current, next, newTracks);
   }
 
+  // Captions are edited as a script, so they're saved directly rather than
+  // going through the clip-history stack — undoing a cut should not also
+  // revert unrelated caption text.
+  function updateSubtitles(next: SubtitleCue[], nextStyle?: SubtitleStyle) {
+    const style = nextStyle ?? subtitleStyleRef.current;
+    setSubtitles(next);
+    if (nextStyle) setSubtitleStyle(nextStyle);
+    subtitlesRef.current = next;
+    subtitleStyleRef.current = style;
+    scheduleSave(clipsRef.current, overlayClipsRef.current, [], { subtitles: next, subtitleStyle: style });
+  }
+
   function undo() {
     if (history.current.past.length === 0) return;
     const prev = history.current.past.pop()!;
@@ -266,6 +312,9 @@ export function useCompositionEditor(projectId: string) {
     overlayTrackId,
     overlayClips,
     withOverlayClips,
+    subtitles,
+    subtitleStyle,
+    updateSubtitles,
     loading,
     loadError,
     saveStatus,

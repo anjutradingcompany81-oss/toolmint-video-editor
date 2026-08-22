@@ -22,6 +22,8 @@ interface EditorHeaderProps {
   voiceCorrectionOpen: boolean;
   onToggleLogo: () => void;
   logoOpen: boolean;
+  onToggleSubtitles: () => void;
+  subtitlesOpen: boolean;
 }
 
 export default function EditorHeader({
@@ -38,6 +40,8 @@ export default function EditorHeader({
   voiceCorrectionOpen,
   onToggleLogo,
   logoOpen,
+  onToggleSubtitles,
+  subtitlesOpen,
 }: EditorHeaderProps) {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -79,6 +83,17 @@ export default function EditorHeader({
       <SaveIndicator status={saveStatus} error={saveError} />
 
       <div className="ml-auto flex items-center gap-3">
+        <button
+          onClick={onToggleSubtitles}
+          aria-pressed={subtitlesOpen}
+          title="Generate, edit and export subtitles"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+            subtitlesOpen ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          Subtitles
+        </button>
+
         <button
           onClick={onToggleLogo}
           aria-pressed={logoOpen}

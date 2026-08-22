@@ -11,6 +11,8 @@ function buildComposition(overrides: Partial<Composition> = {}): Composition {
     schemaVersion: "2.0",
     tracks: [{ id: TRACK_ID, kind: "video", name: "Video 1", order: 0, locked: false, hidden: false, muted: false, solo: false }],
     clips: [{ id: "clip_1", trackId: TRACK_ID, kind: "video", mediaAssetId: "med_1", startMs: 0, durationMs: 1000, trimInMs: 0, trimOutMs: 0, volume: 1, muted: false, speedPercent: 100, transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }, audioPatches: [] }],
+    subtitles: [],
+    subtitleStyle: { fontSizePx: 24, colorHex: "#FFFFFF", outlineHex: "#000000", position: "BOTTOM", burnIn: false },
     updatedAt: new Date().toISOString(),
     ...overrides,
   };

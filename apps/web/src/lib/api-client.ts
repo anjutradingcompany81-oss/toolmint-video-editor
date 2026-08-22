@@ -1,4 +1,7 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// Exported for the few places that build a plain <a href> to the API rather
+// than fetching through apiFetch — e.g. the subtitle sidecar downloads.
+export const API_BASE_URL = API_URL;
 
 let accessToken: string | null = null;
 

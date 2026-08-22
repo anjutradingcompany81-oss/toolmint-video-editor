@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
-import { mkdtemp, rm, stat } from "fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { extname, join } from "path";
 import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
@@ -12,6 +12,7 @@ import { StorageService } from "../storage/storage.service";
 import { compositionSchema, type Clip, type Track } from "../projects/composition.schema";
 import { RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.constants";
 import { buildMultitrackMergeArgs, computeDimensions, type AudioClipSegment, type Resolution, type VisualClipSegment } from "./merge-ffmpeg.util";
+import { escapeSubtitlePath, toForceStyle, toSrt } from "./subtitles.util";
 
 // How often the worker checks whether the user clicked Cancel while ffmpeg
 // is running — not instant, but bounded, and cheap enough not to matter at
@@ -162,6 +163,19 @@ export class RenderProcessor implements OnModuleDestroy {
 
       const totalDurationMs = Math.max(...timeline.clips.map((c) => c.startMs + c.durationMs), 0);
       const outputPath = join(workDir, "output.mp4");
+
+      // Burned-in captions are opt-in — without them the user can still
+      // export .srt/.vtt sidecars and keep the picture untouched.
+      let burnedSubtitles: { escapedPath: string; forceStyle: string } | undefined;
+      if (timeline.subtitleStyle?.burnIn && timeline.subtitles.length > 0) {
+        const srt = toSrt(timeline.subtitles);
+        if (srt.length > 0) {
+          const srtPath = join(workDir, "subtitles.srt");
+          await writeFile(srtPath, srt, "utf8");
+          burnedSubtitles = { escapedPath: escapeSubtitlePath(srtPath), forceStyle: toForceStyle(timeline.subtitleStyle) };
+        }
+      }
+
       const args = buildMultitrackMergeArgs({
         visualClips,
         audioClips,
@@ -171,6 +185,7 @@ export class RenderProcessor implements OnModuleDestroy {
         totalDurationMs,
         quality: exportJob.quality,
         outputPath,
+        burnedSubtitles,
       });
 
       await this.setStatus(exportJob.id, ExportStatus.PROCESSING, 45);

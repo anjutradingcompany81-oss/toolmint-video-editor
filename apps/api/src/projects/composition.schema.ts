@@ -132,11 +132,49 @@ export const TRACK_KIND_FOR_CLIP_KIND: Record<Clip["kind"], TrackKind> = {
   text: "text",
 };
 
+// One caption line, in timeline-absolute ms so it lines up with what the
+// preview and the renderer both already work in. Kept on the timeline
+// rather than as text-kind clips because captions are a single ordered
+// list the user edits as a script, and because the renderer burns them in
+// via ffmpeg's subtitles filter from a generated .srt — not through the
+// overlay/compositing path clips use.
+export const subtitleCueSchema = z
+  .object({
+    id: z.string().min(1),
+    startMs: z.number().int().nonnegative(),
+    endMs: z.number().int().positive(),
+    text: z.string().max(500),
+  })
+  .refine((c) => c.endMs > c.startMs, { message: "endMs must be after startMs" });
+export type SubtitleCue = z.infer<typeof subtitleCueSchema>;
+
+export const subtitleStyleSchema = z.object({
+  fontSizePx: z.number().int().min(8).max(200).default(24),
+  // 6-digit hex, converted to ffmpeg's &HBBGGRR ASS format at render time.
+  colorHex: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .default("#FFFFFF"),
+  outlineHex: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .default("#000000"),
+  position: z.enum(["BOTTOM", "TOP"]).default("BOTTOM"),
+  // Burn-in is opt-in: SRT/VTT can be exported as sidecar files without
+  // permanently altering the picture.
+  burnIn: z.boolean().default(false),
+});
+export type SubtitleStyle = z.infer<typeof subtitleStyleSchema>;
+
+const DEFAULT_SUBTITLE_STYLE = { fontSizePx: 24, colorHex: "#FFFFFF", outlineHex: "#000000", position: "BOTTOM" as const, burnIn: false };
+
 export const timelineSchema = z
   .object({
     schemaVersion: z.literal("2.0"),
     tracks: z.array(trackSchema).default([]),
     clips: z.array(clipSchema).default([]),
+    subtitles: z.array(subtitleCueSchema).default([]),
+    subtitleStyle: subtitleStyleSchema.default(DEFAULT_SUBTITLE_STYLE),
     updatedAt: z.string(),
   })
   .superRefine((timeline, ctx) => {

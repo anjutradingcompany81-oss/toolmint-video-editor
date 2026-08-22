@@ -206,6 +206,10 @@ export interface MultitrackMergePlan {
   totalDurationMs: number;
   quality: Quality;
   outputPath: string;
+  // Set only when the project asks for burned-in captions: the path of an
+  // .srt written to the work dir, already escaped for embedding in a
+  // filter string, plus the ASS force_style to draw it with.
+  burnedSubtitles?: { escapedPath: string; forceStyle: string };
 }
 
 export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
@@ -281,7 +285,12 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
     );
     compositeLabel = nextLabel;
   });
-  filterParts.push(`[${compositeLabel}]fps=${plan.fps},format=yuv420p[vout]`);
+  // Captions burn in last, on top of every composited clip and overlay, so
+  // a logo can't cover them and they read against the final picture.
+  const subtitleFilter = plan.burnedSubtitles
+    ? `,subtitles='${plan.burnedSubtitles.escapedPath}':force_style='${plan.burnedSubtitles.forceStyle}'`
+    : "";
+  filterParts.push(`[${compositeLabel}]fps=${plan.fps},format=yuv420p${subtitleFilter}[vout]`);
 
   // Audio: base silence plus every audio-bearing clip (or a synthetic
   // silent segment for a clip whose source has no audio track), each

@@ -24,6 +24,7 @@ import PropertiesPanel from "./properties-panel";
 import ExportModal from "./export-modal";
 import VoiceCorrectionPanel, { type VoiceMarker } from "./voice-correction-panel";
 import LogoPanel from "./logo-panel";
+import SubtitlesPanel from "./subtitles-panel";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -58,6 +59,9 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     clips,
     overlayClips,
     withOverlayClips,
+    subtitles,
+    subtitleStyle,
+    updateSubtitles,
     loading,
     loadError,
     saveStatus,
@@ -83,6 +87,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [message, setMessage] = useState<EditorMessage | null>(null);
   const [voiceCorrectionOpen, setVoiceCorrectionOpen] = useState(false);
   const [logoOpen, setLogoOpen] = useState(false);
+  const [subtitlesOpen, setSubtitlesOpen] = useState(false);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
@@ -481,6 +486,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         voiceCorrectionOpen={voiceCorrectionOpen}
         onToggleLogo={() => setLogoOpen((v) => !v)}
         logoOpen={logoOpen}
+        onToggleSubtitles={() => setSubtitlesOpen((v) => !v)}
+        subtitlesOpen={subtitlesOpen}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -554,6 +561,16 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           projectHeight={canvasHeight}
           totalDurationMs={totalDurationMs}
           withOverlayClips={withOverlayClips}
+        />
+
+        <SubtitlesPanel
+          open={subtitlesOpen}
+          onClose={() => setSubtitlesOpen(false)}
+          projectId={projectId}
+          subtitles={subtitles}
+          subtitleStyle={subtitleStyle}
+          onChange={updateSubtitles}
+          onSeek={player.seekTo}
         />
 
         <VoiceCorrectionPanel
