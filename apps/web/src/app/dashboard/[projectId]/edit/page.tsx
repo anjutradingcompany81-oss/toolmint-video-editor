@@ -6,7 +6,7 @@ import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
-import { newVideoClip, splitClip, removeRangeOnTrack, type MediaClip } from "@/lib/composition-api";
+import { newVideoClip, splitClip, removeRangeOnTrack, moveClip, type MediaClip } from "@/lib/composition-api";
 import EditorHeader from "./editor-header";
 import MediaPanel from "./media-panel";
 import PreviewPanel from "./preview-panel";
@@ -91,11 +91,24 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   // Clips already carry their own absolute startMs/durationMs (the v2
   // model) — no need to re-derive position from array order the way the
   // old flat-clip model had to.
+  // Sorted by startMs, not left in raw array-insertion order: free timeline
+  // placement (moveClip) can leave a clip with an earlier startMs than one
+  // that was added to `clips` before it, and useTimelinePlayer's
+  // findIndexAt/next-clip-on-ended logic both assume array order IS
+  // chronological order (a linear scan and a plain `index + 1`,
+  // respectively) — sorting once here, at the single shared source both
+  // the player and the timeline UI consume, keeps every downstream
+  // consumer correct instead of patching each one separately.
   const layout: ClipLayoutEntry[] = useMemo(() => {
-    return clips.map((clip) => ({ clip, asset: mediaById.get(clip.mediaAssetId), startMs: clip.startMs, durationMs: clip.durationMs }));
+    return clips
+      .map((clip) => ({ clip, asset: mediaById.get(clip.mediaAssetId), startMs: clip.startMs, durationMs: clip.durationMs }))
+      .sort((a, b) => a.startMs - b.startMs);
   }, [clips, mediaById]);
 
-  const totalDurationMs = layout.length > 0 ? layout[layout.length - 1].startMs + layout[layout.length - 1].durationMs : 0;
+  // Math.max over every entry, not just the last one post-sort — a clip
+  // with a later startMs isn't guaranteed to also have the later *end*
+  // once clips can leave gaps or (on a different track) run concurrently.
+  const totalDurationMs = layout.reduce((max, e) => Math.max(max, e.startMs + e.durationMs), 0);
 
   const player = useTimelinePlayer(layout, totalDurationMs);
   const activeEntry = useMemo(() => {
@@ -138,14 +151,13 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips],
   );
 
-  const reorderClips = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      withClips((prev) => {
-        const next = [...prev];
-        const [moved] = next.splice(fromIndex, 1);
-        next.splice(toIndex, 0, moved);
-        return next;
-      });
+  // Free timeline placement: moves one clip to an absolute position,
+  // clamped (in moveClip's own pure logic) to avoid overlapping any other
+  // clip on the same track — gaps are allowed and deliberately preserved,
+  // unlike every other timeline edit here which repacks to close them.
+  const moveClipHandler = useCallback(
+    (clipId: string, candidateStartMs: number) => {
+      withClips((prev) => moveClip(prev, clipId, candidateStartMs));
     },
     [withClips],
   );
@@ -419,7 +431,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             pixelsPerSecond={pixelsPerSecond}
             onZoomChange={setPixelsPerSecond}
             onTrim={trimClip}
-            onReorder={reorderClips}
+            onMoveClip={moveClipHandler}
             onSplit={splitAtPlayhead}
             onDeleteSelected={() => selectedClipId && deleteClip(selectedClipId)}
             splitDisabled={!canSplit}

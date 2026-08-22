@@ -168,6 +168,61 @@ export function removeAudioPatch(clips: Clip[], clipId: string, patchId: string)
   return clips.map((c) => (c.id === clipId && c.kind !== "text" ? { ...c, audioPatches: c.audioPatches.filter((p) => p.id !== patchId) } : c));
 }
 
+// Finds the nearest valid startMs for a clip of `durationMs` that avoids
+// overlapping any `others` (every other clip already on the same track),
+// starting from `candidateMs` — free timeline placement allows gaps
+// between clips but never an overlap on the same track, mirroring
+// composition.schema.ts's per-track validation. Clamping live during a
+// drag (rather than only at save time) means every frame of the drag is
+// already a save-valid position, so there's never a moment where letting
+// go produces a validation error the user didn't see coming.
+export function clampMoveStartMs(others: { startMs: number; durationMs: number }[], durationMs: number, candidateMs: number): number {
+  const candidate = Math.max(0, candidateMs);
+  const sorted = [...others].sort((a, b) => a.startMs - b.startMs);
+
+  const gaps: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const o of sorted) {
+    if (o.startMs > cursor) gaps.push({ start: cursor, end: o.startMs });
+    cursor = Math.max(cursor, o.startMs + o.durationMs);
+  }
+  gaps.push({ start: cursor, end: Infinity });
+
+  // Already fits somewhere without moving further? Use it as-is.
+  for (const gap of gaps) {
+    if (candidate >= gap.start && candidate + durationMs <= gap.end) return candidate;
+  }
+
+  // Otherwise snap to whichever edge of the nearest large-enough gap is
+  // closest to the raw drop point (the trailing [cursor, Infinity) gap
+  // always qualifies, so this always finds a valid position).
+  let best = 0;
+  let bestDist = Infinity;
+  for (const gap of gaps) {
+    if (gap.end - gap.start < durationMs) continue;
+    const maxStartInGap = gap.end === Infinity ? Infinity : gap.end - durationMs;
+    const target = Math.min(Math.max(candidate, gap.start), maxStartInGap);
+    const dist = Math.abs(target - candidate);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = target;
+    }
+  }
+  return best;
+}
+
+// Moves one clip to a new absolute timeline position, clamped to avoid
+// overlapping any other clip on the *same* track (different tracks never
+// collide with each other). Unlike repackTrack, this deliberately leaves
+// whatever gap the move creates in place — free placement is the point.
+export function moveClip(clips: Clip[], clipId: string, candidateStartMs: number): Clip[] {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip) return clips;
+  const others = clips.filter((c) => c.trackId === clip.trackId && c.id !== clipId).map((c) => ({ startMs: c.startMs, durationMs: c.durationMs }));
+  const startMs = clampMoveStartMs(others, clip.durationMs, candidateStartMs);
+  return clips.map((c) => (c.id === clipId ? { ...c, startMs } : c));
+}
+
 export function newVideoTrack(name: string, order: number): Track {
   return { id: randomId("track"), kind: "video", name, order, locked: false, hidden: false, muted: false, solo: false };
 }

@@ -121,6 +121,31 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
     else play();
   }, [playing, play, pause]);
 
+  // `playing` was previously only ever set manually inside play()/pause() —
+  // browsers can interrupt an in-flight play() promise when pause() fires
+  // before it resolves (a documented DOMException case), which can leave
+  // that manually-tracked boolean saying "playing" while the actual
+  // <video> element is paused: the button shows Pause (so clicking it
+  // calls pause() again, a no-op) and playback never resumes. Mirroring
+  // the element's real play/pause/ended events keeps React state from
+  // ever silently diverging from the DOM's actual state, closing off this
+  // whole class of "button says X but the video is actually Y" bug rather
+  // than patching this one interrupted-promise case specifically.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlay = () => setPlaying(true);
+    const onPauseOrEnd = () => setPlaying(false);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPauseOrEnd);
+    video.addEventListener("ended", onPauseOrEnd);
+    return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPauseOrEnd);
+      video.removeEventListener("ended", onPauseOrEnd);
+    };
+  }, []);
+
   // Advances the timeline forward by one video frame's worth of time —
   // "prev/next frame" in the spec. fps defaults to a typical 30 when the
   // project's own rate isn't passed in.

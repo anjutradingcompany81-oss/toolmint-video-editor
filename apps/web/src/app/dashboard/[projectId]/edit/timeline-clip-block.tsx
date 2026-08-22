@@ -9,32 +9,38 @@ import { formatTimecode } from "./format";
 
 const SNAP_PX = 8;
 
+// Below this many px of pointer movement, a press-and-release on the
+// clip body is treated as a click (select), not a move-drag — without a
+// threshold, every plain click would jitter the clip by a pixel or two
+// before onSelect ever fires.
+const MOVE_THRESHOLD_PX = 4;
+
 interface TimelineClipBlockProps {
   entry: ClipLayoutEntry;
-  index: number;
   pixelsPerSecond: number;
   selected: boolean;
   snapPoints: number[];
   onSelect: () => void;
   onTrim: (edge: "start" | "end", trimInMs: number, trimOutMs: number) => void;
-  onDragStart: (index: number) => void;
-  onDragOverIndex: (index: number) => void;
-  onDrop: () => void;
+  // Free timeline placement: reports a live candidate startMs on every
+  // pointer-move frame of a drag (already snapped to nearby edges here,
+  // but NOT yet collision-clamped — the caller owns that, since avoiding
+  // an overlap requires knowing every other clip on the track, not just
+  // this block's own snap points).
+  onMove: (clipId: string, candidateStartMs: number) => void;
 }
 
 export default function TimelineClipBlock({
   entry,
-  index,
   pixelsPerSecond,
   selected,
   snapPoints,
   onSelect,
   onTrim,
-  onDragStart,
-  onDragOverIndex,
-  onDrop,
+  onMove,
 }: TimelineClipBlockProps) {
   const dragInfo = useRef<{ edge: "start" | "end"; startClientX: number; trimInMs: number; trimOutMs: number } | null>(null);
+  const moveInfo = useRef<{ startClientX: number; originStartMs: number; moved: boolean } | null>(null);
   const pxPerMs = pixelsPerSecond / 1000;
   const widthPx = Math.max(6, (entry.durationMs / 1000) * pixelsPerSecond);
   const sourceDurationMs = entry.asset?.durationMs ?? entry.durationMs + entry.clip.trimInMs + entry.clip.trimOutMs;
@@ -45,6 +51,24 @@ export default function TimelineClipBlock({
       if (Math.abs(candidateMs - point) <= thresholdMs) return point;
     }
     return candidateMs;
+  }
+
+  function handleBodyPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    moveInfo.current = { startClientX: e.clientX, originStartMs: entry.startMs, moved: false };
+  }
+  function handleBodyPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const info = moveInfo.current;
+    if (!info) return;
+    const deltaPx = e.clientX - info.startClientX;
+    if (!info.moved && Math.abs(deltaPx) < MOVE_THRESHOLD_PX) return;
+    info.moved = true;
+    const candidateMs = Math.max(0, info.originStartMs + deltaPx / pxPerMs);
+    onMove(entry.clip.id, snap(candidateMs));
+  }
+  function handleBodyPointerUp() {
+    if (!moveInfo.current?.moved) onSelect();
+    moveInfo.current = null;
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
@@ -83,27 +107,16 @@ export default function TimelineClipBlock({
 
   return (
     <div
-      className={`group relative flex h-20 shrink-0 select-none flex-col overflow-hidden rounded-md border bg-panel transition-colors ${
+      className={`group absolute flex h-20 shrink-0 select-none flex-col overflow-hidden rounded-md border bg-panel transition-colors ${
         selected ? "border-brand ring-1 ring-brand" : "border-line hover:border-brand/50"
       }`}
-      style={{ width: widthPx }}
-      onClick={onSelect}
+      style={{ width: widthPx, left: (entry.startMs / 1000) * pixelsPerSecond }}
     >
       <div
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.effectAllowed = "move";
-          onDragStart(index);
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          onDragOverIndex(index);
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          onDrop();
-        }}
-        className="relative flex flex-1 flex-col overflow-hidden"
+        onPointerDown={handleBodyPointerDown}
+        onPointerMove={handleBodyPointerMove}
+        onPointerUp={handleBodyPointerUp}
+        className="relative flex flex-1 cursor-grab flex-col overflow-hidden active:cursor-grabbing"
         title={entry.asset?.originalName}
       >
         {entry.asset && <MediaThumb asset={entry.asset} className="absolute inset-0 h-full w-full object-cover opacity-60" />}

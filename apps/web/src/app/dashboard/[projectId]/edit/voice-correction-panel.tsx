@@ -272,7 +272,14 @@ export default function VoiceCorrectionPanel({
 
   async function openBatchModal() {
     if (!job) return;
-    setBatchPreview(await getBatchPreview(projectId, job.id));
+    setError(null);
+    try {
+      setBatchPreview(await getBatchPreview(projectId, job.id));
+    } catch (err) {
+      // Was previously unhandled — a failed fetch here left the button
+      // looking like it did nothing at all, no modal and no error either.
+      setError(err instanceof ApiError ? err.message : "Couldn't load the batch preview.");
+    }
   }
 
   // Lazy — only fetched the first time the user actually switches to the
@@ -335,17 +342,29 @@ export default function VoiceCorrectionPanel({
   async function confirmBatch() {
     if (!job) return;
     setBatchApplying(true);
+    setError(null);
     try {
       const highConfidence = results.filter((r) => r.status === "PENDING" && r.confidenceBucket === "HIGH");
       let nextClips: Clip[] = clips;
       const applied: { id: string; appliedMode: CorrectionMode }[] = [];
+      let skipped = 0;
 
       for (const result of highConfidence) {
         const clip = nextClips.find((c) => c.id === result.clipId) as MediaClip | undefined;
-        if (!clip) continue;
+        if (!clip) {
+          skipped++;
+          continue;
+        }
         if (result.suggestedMode === "AUDIO_VIDEO_TRIM") {
           const cutResult = removeRangeOnTrack(nextClips, result.trackId, () => mediaById.get(clip.mediaAssetId)?.durationMs ?? 0, result.repeatedStartMs, result.repeatedEndMs);
-          if (cutResult.ok) nextClips = cutResult.clips;
+          if (!cutResult.ok) {
+            // Previously this silently skipped applying the fix but still
+            // recorded it as "applied" below — the card would show as
+            // corrected while nothing on the timeline actually changed.
+            skipped++;
+            continue;
+          }
+          nextClips = cutResult.clips;
         } else {
           const localStart = result.repeatedStartMs - clip.startMs;
           const localEnd = result.repeatedEndMs - clip.startMs;
@@ -354,10 +373,17 @@ export default function VoiceCorrectionPanel({
         applied.push({ id: result.id, appliedMode: result.suggestedMode });
       }
 
-      withClips(() => nextClips);
-      setResults((prev) => prev.map((r) => (applied.some((a) => a.id === r.id) ? { ...r, status: "APPLIED", appliedMode: r.suggestedMode } : r)));
-      if (applied.length > 0) await batchMarkResults(projectId, job.id, applied);
+      if (applied.length > 0) {
+        withClips(() => nextClips);
+        setResults((prev) => prev.map((r) => (applied.some((a) => a.id === r.id) ? { ...r, status: "APPLIED", appliedMode: r.suggestedMode } : r)));
+        await batchMarkResults(projectId, job.id, applied);
+      }
+      if (skipped > 0) {
+        setError(`${skipped} of ${highConfidence.length} corrections couldn't be applied (their clip may have changed since the scan ran) — the rest were applied.`);
+      }
       setBatchPreview(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't apply the batch correction.");
     } finally {
       setBatchApplying(false);
     }
@@ -510,6 +536,14 @@ export default function VoiceCorrectionPanel({
                 {t.newScan}
               </button>
             </div>
+
+            {error && (
+              // Was previously only rendered on the pre-scan screen — a
+              // failed "Remove Duplicate" or "Correct All" click here had
+              // nowhere to show its message, so it looked like the button
+              // silently did nothing at all.
+              <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+            )}
 
             <div className="flex gap-1 rounded-lg border border-line bg-panel p-0.5 text-xs">
               <button

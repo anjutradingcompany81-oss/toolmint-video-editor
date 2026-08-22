@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import type { ClipLayoutEntry } from "@/lib/use-timeline-player";
 import TimelineClipBlock from "./timeline-clip-block";
 import { formatTimecode } from "./format";
@@ -63,7 +63,7 @@ interface TimelinePanelProps {
   pixelsPerSecond: number;
   onZoomChange: (pps: number) => void;
   onTrim: (clipId: string, trimInMs: number, trimOutMs: number) => void;
-  onReorder: (fromIndex: number, toIndex: number) => void;
+  onMoveClip: (clipId: string, candidateStartMs: number) => void;
   onSplit: () => void;
   onDeleteSelected: () => void;
   splitDisabled: boolean;
@@ -176,7 +176,7 @@ export default function TimelinePanel({
   pixelsPerSecond,
   onZoomChange,
   onTrim,
-  onReorder,
+  onMoveClip,
   onSplit,
   onDeleteSelected,
   splitDisabled,
@@ -194,8 +194,6 @@ export default function TimelinePanel({
   voiceMarkers = [],
 }: TimelinePanelProps) {
   const trackRef = useRef<HTMLDivElement>(null);
-  const dragFromIndex = useRef<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const scrubbing = useRef(false);
   const selectionDrag = useRef<"start" | "end" | null>(null);
 
@@ -251,14 +249,6 @@ export default function TimelinePanel({
   }
   function handleSelectionHandlePointerUp() {
     selectionDrag.current = null;
-  }
-
-  function handleDrop() {
-    if (dragFromIndex.current !== null && dragOverIndex !== null && dragFromIndex.current !== dragOverIndex) {
-      onReorder(dragFromIndex.current, dragOverIndex);
-    }
-    dragFromIndex.current = null;
-    setDragOverIndex(null);
   }
 
   const rulerMarks = useMemo(() => {
@@ -413,23 +403,22 @@ export default function TimelinePanel({
               </div>
             )}
 
-            {/* Clip row */}
-            <div className="flex items-start gap-0.5" onDragLeave={() => setDragOverIndex(null)}>
-              {layout.map((entry, index) => (
-                <div key={entry.clip.id} className={dragOverIndex === index ? "border-l-2 border-brand" : ""}>
-                  <TimelineClipBlock
-                    entry={entry}
-                    index={index}
-                    pixelsPerSecond={pixelsPerSecond}
-                    selected={selectedClipId === entry.clip.id}
-                    snapPoints={snapPoints}
-                    onSelect={() => onSelectClip(entry.clip.id)}
-                    onTrim={(_edge, trimInMs, trimOutMs) => onTrim(entry.clip.id, trimInMs, trimOutMs)}
-                    onDragStart={(i) => (dragFromIndex.current = i)}
-                    onDragOverIndex={setDragOverIndex}
-                    onDrop={handleDrop}
-                  />
-                </div>
+            {/* Clip row — each block is absolutely positioned by its own
+                startMs (free timeline placement), not flowed by flexbox,
+                so a real gap or a clip dragged well past its neighbors
+                renders exactly where it actually is. */}
+            <div className="relative h-20">
+              {layout.map((entry) => (
+                <TimelineClipBlock
+                  key={entry.clip.id}
+                  entry={entry}
+                  pixelsPerSecond={pixelsPerSecond}
+                  selected={selectedClipId === entry.clip.id}
+                  snapPoints={snapPoints}
+                  onSelect={() => onSelectClip(entry.clip.id)}
+                  onTrim={(_edge, trimInMs, trimOutMs) => onTrim(entry.clip.id, trimInMs, trimOutMs)}
+                  onMove={onMoveClip}
+                />
               ))}
             </div>
 

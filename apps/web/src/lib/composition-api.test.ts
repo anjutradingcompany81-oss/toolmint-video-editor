@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   addAudioPatch,
+  clampMoveStartMs,
   clipDurationFromTrim,
   MIN_CLIP_DURATION_MS,
+  moveClip,
   newVideoClip,
   removeAudioPatch,
   removeRangeOnTrack,
@@ -275,5 +277,74 @@ describe("audio patches survive trim/split by remapping to the new clip window",
     if (!result.ok) return;
     const allPatches = (result.clips as MediaClip[]).flatMap((c) => c.audioPatches);
     expect(allPatches).toHaveLength(0);
+  });
+});
+
+describe("clampMoveStartMs", () => {
+  it("allows a free drop into an empty track with no clamping", () => {
+    expect(clampMoveStartMs([], 2000, 5000)).toBe(5000);
+  });
+
+  it("allows dropping into a gap between two other clips, leaving gaps on both sides", () => {
+    const others = [
+      { startMs: 0, durationMs: 2000 },
+      { startMs: 10_000, durationMs: 2000 },
+    ];
+    expect(clampMoveStartMs(others, 1000, 5000)).toBe(5000);
+  });
+
+  it("clamps forward to just after the overlapping clip when dropped inside it, closer to that edge", () => {
+    const others = [{ startMs: 1000, durationMs: 3000 }]; // occupies [1000, 4000)
+    expect(clampMoveStartMs(others, 500, 3800)).toBe(4000); // dropped near the end, pushed just past it
+  });
+
+  it("clamps backward to just before the overlapping clip when dropped inside it, closer to that edge", () => {
+    const others = [{ startMs: 1000, durationMs: 3000 }]; // occupies [1000, 4000)
+    expect(clampMoveStartMs(others, 500, 1200)).toBe(500); // dropped near the start, pushed just before it
+  });
+
+  it("never produces a negative startMs even when dragged past zero", () => {
+    expect(clampMoveStartMs([], 1000, -5000)).toBe(0);
+  });
+
+  it("clamps into the nearest gap large enough to fit, skipping ones that are too small", () => {
+    const others = [
+      { startMs: 0, durationMs: 1000 }, // gap after: [1000, 1200) — only 200ms, too small for a 500ms clip
+      { startMs: 1200, durationMs: 100 },
+      { startMs: 1300, durationMs: 5000 }, // occupies to 6300; trailing gap [6300, Infinity) always fits
+    ];
+    expect(clampMoveStartMs(others, 500, 1250)).toBe(6300);
+  });
+
+  it("ignores clips on other tracks entirely (handled by moveClip, not this function, but confirms the primitive doesn't itself assume same-track filtering)", () => {
+    // clampMoveStartMs only ever receives same-track others by contract — this just
+    // confirms the raw candidate passes through untouched when no others are given.
+    expect(clampMoveStartMs([], 1000, 42_000)).toBe(42_000);
+  });
+});
+
+describe("moveClip", () => {
+  it("moves a clip to a free position, leaving a real gap where it used to be", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 2000 }), buildClip({ id: "b", startMs: 2000, durationMs: 2000 })];
+    const next = moveClip(clips, "b", 10_000);
+    expect((next.find((c) => c.id === "b") as MediaClip).startMs).toBe(10_000);
+    expect((next.find((c) => c.id === "a") as MediaClip).startMs).toBe(0); // untouched
+  });
+
+  it("clamps the move to avoid overlapping a same-track clip", () => {
+    const clips = [buildClip({ id: "a", startMs: 0, durationMs: 2000 }), buildClip({ id: "b", startMs: 5000, durationMs: 2000 })];
+    const next = moveClip(clips, "b", 500); // would overlap "a" [0,2000) if placed at 500
+    expect((next.find((c) => c.id === "b") as MediaClip).startMs).toBe(2000); // pushed to just after "a"
+  });
+
+  it("never lets a clip collide with one on a different track", () => {
+    const clips = [buildClip({ id: "a", trackId: TRACK_A, startMs: 0, durationMs: 5000 }), buildClip({ id: "b", trackId: TRACK_B, startMs: 9000, durationMs: 2000 })];
+    const next = moveClip(clips, "b", 1000); // fully overlaps "a" in time, but different track — must be untouched (no cross-track clamping)
+    expect((next.find((c) => c.id === "b") as MediaClip).startMs).toBe(1000);
+  });
+
+  it("is a no-op when the clip id doesn't exist", () => {
+    const clips = [buildClip({ id: "a" })];
+    expect(moveClip(clips, "missing", 5000)).toBe(clips);
   });
 });
