@@ -113,6 +113,8 @@ export class RenderProcessor implements OnModuleDestroy {
             sourceWidth: asset.width ?? 0,
             sourceHeight: asset.height ?? 0,
             transform: clip.transform,
+            fadeInMs: clip.fadeInMs,
+            fadeOutMs: clip.fadeOutMs,
             // A still decodes to a single frame unless ffmpeg is told to
             // loop it, which would put the logo on screen for one frame
             // instead of the clip's whole span.
@@ -146,6 +148,8 @@ export class RenderProcessor implements OnModuleDestroy {
             hasAudio: asset.hasAudio,
             volume: clip.volume,
             audioPatches: clip.audioPatches,
+            fadeInMs: clip.fadeInMs,
+            fadeOutMs: clip.fadeOutMs,
           };
         })
         .filter((segment) => segment.hasAudio);

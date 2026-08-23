@@ -36,6 +36,8 @@ function buildClip(overrides: Partial<MediaClip> = {}): MediaClip {
     volume: 1,
     muted: false,
     speedPercent: 100,
+    fadeInMs: 0,
+    fadeOutMs: 0,
     transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
     audioPatches: [],
     ...overrides,
@@ -556,6 +558,8 @@ describe("positionOverlayClip", () => {
       volume: 0,
       muted: true,
       speedPercent: 100,
+      fadeInMs: 0,
+      fadeOutMs: 0,
       transform: { x, y, scale: 0.5, rotation: 0, opacity: 0.9 },
       audioPatches: [],
     };
@@ -600,6 +604,8 @@ describe("removeRangeOnTrack preserves the rest of the timeline", () => {
       volume: 1,
       muted: false,
       speedPercent: 100,
+      fadeInMs: 0,
+      fadeOutMs: 0,
       transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
       audioPatches: [],
     };
@@ -665,7 +671,7 @@ describe("removeRangeOnTrack keeps the cut clip's own length", () => {
   function vclip(id: string, startMs: number, durationMs: number, trimInMs = 0): MediaClip {
     return {
       id, trackId: T, kind: "video", mediaAssetId: "m1", startMs, durationMs, trimInMs, trimOutMs: 0,
-      volume: 1, muted: false, speedPercent: 100,
+      volume: 1, muted: false, speedPercent: 100, fadeInMs: 0, fadeOutMs: 0,
       transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }, audioPatches: [],
     };
   }

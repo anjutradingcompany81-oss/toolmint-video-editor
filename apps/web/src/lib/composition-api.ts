@@ -57,6 +57,9 @@ export interface MediaClip extends BaseClip {
   volume: number;
   muted: boolean;
   speedPercent: number;
+  /** Fade lengths in ms, measured in from each end of the clip. */
+  fadeInMs: number;
+  fadeOutMs: number;
   transform: Transform;
   audioPatches: AudioPatch[];
 }
@@ -174,6 +177,8 @@ export function newVideoClip(trackId: string, mediaAssetId: string, startMs: num
     volume: 1,
     muted: false,
     speedPercent: 100,
+    fadeInMs: 0,
+    fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM },
     audioPatches: [],
   };
@@ -482,6 +487,8 @@ export function newAudioClip(trackId: string, mediaAssetId: string, startMs: num
     volume: 1,
     muted: false,
     speedPercent: 100,
+    fadeInMs: 0,
+    fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM },
     audioPatches: [],
   };
@@ -609,6 +616,8 @@ export function newLogoClip(
     volume: 0,
     muted: true,
     speedPercent: 100,
+    fadeInMs: 0,
+    fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM, ...transform },
     audioPatches: [],
   };

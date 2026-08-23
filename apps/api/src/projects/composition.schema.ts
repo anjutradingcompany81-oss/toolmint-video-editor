@@ -97,6 +97,12 @@ function mediaClipShape<K extends "video" | "audio" | "overlay">(kind: K) {
     // accepted and round-tripped now so the schema doesn't need another
     // breaking migration when that phase lands.
     speedPercent: z.number().int().positive().default(100),
+    // Fade lengths in milliseconds, measured from each end of the clip.
+    // Defaulted, so clips saved before fades existed still parse. Whether
+    // the two fades can overlap is checked below, where the clip's own
+    // duration is in scope.
+    fadeInMs: z.number().int().nonnegative().default(0),
+    fadeOutMs: z.number().int().nonnegative().default(0),
     transform: transformSchema,
     audioPatches: z.array(audioPatchSchema).default([]),
   };
@@ -223,6 +229,18 @@ export const timelineSchema = z
       byTrack.set(clip.trackId, list);
 
       if (clip.kind !== "text") {
+        // Two fades that between them outlast the clip would have the
+        // fade-out start before the fade-in finished, which ffmpeg renders
+        // as a clip that never reaches full opacity - almost never what
+        // was meant, and impossible to diagnose from the output.
+        if (clip.fadeInMs + clip.fadeOutMs > clip.durationMs) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["clips", index, "fadeInMs"],
+            message: "The fade in and fade out are longer than the clip itself",
+          });
+        }
+
         const patches = [...clip.audioPatches].sort((a, b) => a.startMs - b.startMs);
         for (let i = 0; i < patches.length; i++) {
           if (patches[i].endMs > clip.durationMs) {

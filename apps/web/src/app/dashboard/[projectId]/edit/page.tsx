@@ -319,6 +319,23 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips],
   );
 
+  // Fades are clamped here as well as in the renderer, so the number the
+  // panel shows is the number that will actually be used rather than one
+  // quietly corrected later.
+  const setClipFades = useCallback(
+    (clipId: string, fadeInMs: number, fadeOutMs: number) => {
+      withClips((prev) =>
+        prev.map((c) => {
+          if (c.id !== clipId) return c;
+          const inMs = Math.max(0, Math.min(Math.round(fadeInMs), c.durationMs));
+          const outMs = Math.max(0, Math.min(Math.round(fadeOutMs), c.durationMs - inMs));
+          return { ...c, fadeInMs: inMs, fadeOutMs: outMs };
+        }),
+      );
+    },
+    [withClips],
+  );
+
   const setClipMuted = useCallback(
     (clipId: string, muted: boolean) => {
       withClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, muted } : c)));
@@ -668,6 +685,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           entry={selectedEntry}
           onSetTrim={(trimInMs, trimOutMs) => selectedClipId && trimClip(selectedClipId, trimInMs, trimOutMs)}
           onSetVolume={(volume) => selectedClipId && setClipVolume(selectedClipId, volume)}
+          onSetFades={(fadeInMs, fadeOutMs) => selectedClipId && setClipFades(selectedClipId, fadeInMs, fadeOutMs)}
           onSetMuted={(muted) => selectedClipId && setClipMuted(selectedClipId, muted)}
           onReset={() => selectedClipId && resetClip(selectedClipId)}
           onDelete={() => selectedClipId && deleteClip(selectedClipId)}

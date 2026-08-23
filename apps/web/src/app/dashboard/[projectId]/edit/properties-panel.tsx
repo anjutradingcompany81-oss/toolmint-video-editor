@@ -9,6 +9,7 @@ interface PropertiesPanelProps {
   entry: ClipLayoutEntry | undefined;
   onSetTrim: (trimInMs: number, trimOutMs: number) => void;
   onSetVolume: (volume: number) => void;
+  onSetFades: (fadeInMs: number, fadeOutMs: number) => void;
   onSetMuted: (muted: boolean) => void;
   onReset: () => void;
   onDelete: () => void;
@@ -22,6 +23,7 @@ export default function PropertiesPanel({
   entry,
   onSetTrim,
   onSetVolume,
+  onSetFades,
   onSetMuted,
   onReset,
   onDelete,
@@ -126,6 +128,38 @@ export default function PropertiesPanel({
           <input type="checkbox" checked={clip.muted} onChange={(e) => onSetMuted(e.target.checked)} />
           Muted
         </label>
+      </div>
+
+      {/* Fades apply to picture and sound together — a clip that dips to
+          black while its audio carries on at full level sounds like a
+          mistake, and wanting one without the other is rare enough not to
+          justify two more controls. */}
+      <div className="flex flex-col gap-2 border-t border-line pt-3">
+        <p className="text-xs uppercase tracking-wide text-ink-muted">Fade</p>
+        {/* Capped at half the clip each, so the two can never overlap and
+            leave it never reaching full brightness. */}
+        {(
+          [
+            ["Fade in", clip.fadeInMs ?? 0, (v: number) => onSetFades(v, clip.fadeOutMs ?? 0)],
+            ["Fade out", clip.fadeOutMs ?? 0, (v: number) => onSetFades(clip.fadeInMs ?? 0, v)],
+          ] as [string, number, (v: number) => void][]
+        ).map(([label, value, set]) => (
+          <div key={label} className="flex flex-col gap-1">
+            <label className="flex items-center justify-between text-xs text-ink-muted">
+              {label}
+              <span className="tabular-nums text-ink">{value === 0 ? "None" : `${(value / 1000).toFixed(2)}s`}</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, Math.floor(clip.durationMs / 2))}
+              step={50}
+              value={Math.min(value, Math.floor(clip.durationMs / 2))}
+              onChange={(e) => set(Number(e.target.value))}
+              className="w-full accent-brand"
+            />
+          </div>
+        ))}
       </div>
 
       <div className="mt-auto flex flex-col gap-2 border-t border-line pt-3">

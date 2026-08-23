@@ -1,4 +1,5 @@
 import { buildWatermarkFilterParts, type WatermarkRegion } from "./watermark.util";
+import { buildAudioFadeFilters, buildVideoFadeFilters } from "./fade.util";
 // Pure helpers for planning a multitrack render — no file I/O or process
 // spawning, so the filter-graph logic can be unit tested without a real
 // ffmpeg binary.
@@ -65,6 +66,9 @@ export interface Transform {
 }
 
 export interface VisualClipSegment {
+  /** Fade lengths in ms, measured inward from each end of the clip. */
+  fadeInMs?: number;
+  fadeOutMs?: number;
   localPath: string;
   kind: "video" | "overlay";
   // Compositing order across all visual tracks — lower renders first
@@ -99,6 +103,8 @@ export interface AudioPatchSegment {
 }
 
 export interface AudioClipSegment {
+  fadeInMs?: number;
+  fadeOutMs?: number;
   localPath: string;
   startMs: number;
   durationMs: number;
@@ -270,10 +276,24 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
     const targetW = evenize(Math.round(fitWidth * clip.transform.scale));
     const targetH = evenize(Math.round(fitHeight * clip.transform.scale));
 
+    // Fades are timed in the clip's OWN time, so they are applied while
+    // PTS still starts at zero and the shift to the clip's timeline
+    // position happens afterwards. Folding both into one setpts (as this
+    // did) would time the fade against the whole timeline, so a clip
+    // starting at 0:30 would have finished fading in before it appeared.
+    //
+    // An overlay fades its alpha instead of towards black: it sits on top
+    // of other picture, and fading to black would punch a hole through to
+    // nothing rather than revealing what is underneath.
+    const fadeFilters = buildVideoFadeFilters(
+      { fadeInMs: clip.fadeInMs ?? 0, fadeOutMs: clip.fadeOutMs ?? 0, durationMs: clip.durationMs },
+      clip.kind === "overlay",
+    );
     filterParts.push(
-      `[${inputIndex}:v]trim=start=${sec(clip.trimInMs)}:duration=${durationS},setpts=PTS-STARTPTS+${startS}/TB,` +
+      `[${inputIndex}:v]trim=start=${sec(clip.trimInMs)}:duration=${durationS},setpts=PTS-STARTPTS,` +
         `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,format=yuva420p,` +
-        `colorchannelmixer=aa=${clip.transform.opacity.toFixed(3)}[${label}]`,
+        (fadeFilters ? `${fadeFilters},` : "") +
+        `colorchannelmixer=aa=${clip.transform.opacity.toFixed(3)},setpts=PTS+${startS}/TB[${label}]`,
     );
   });
 
@@ -329,8 +349,16 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
     if (clip.hasAudio) {
       const { filterLines, outputLabel } = buildClipAudioFilterChain(clip, inputIndex, `a${i}_`);
       filterParts.push(...filterLines);
+      // Same clip-local reasoning as the picture: the delay to the clip's
+      // timeline position is applied after the fade, not before.
+      const audioFades = buildAudioFadeFilters({
+        fadeInMs: clip.fadeInMs ?? 0,
+        fadeOutMs: clip.fadeOutMs ?? 0,
+        durationMs: clip.durationMs,
+      });
       filterParts.push(
         `[${outputLabel}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume=${clip.volume.toFixed(3)},` +
+          (audioFades ? `${audioFades},` : "") +
           `adelay=${delayMs}|${delayMs}[${label}]`,
       );
       audioLabels.push(label);

@@ -39,6 +39,8 @@ function baseClip(overrides: Partial<MediaClip> = {}): MediaClip {
     volume: 1,
     muted: false,
     speedPercent: 100,
+    fadeInMs: 0,
+    fadeOutMs: 0,
     transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
     audioPatches: [],
     ...overrides,
