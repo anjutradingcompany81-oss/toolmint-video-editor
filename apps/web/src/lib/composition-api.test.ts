@@ -340,6 +340,21 @@ describe("clampMoveStartMs", () => {
     // confirms the raw candidate passes through untouched when no others are given.
     expect(clampMoveStartMs([], 1000, 42_000)).toBe(42_000);
   });
+
+  it("rounds a fractional candidate to a whole millisecond — reproduces a real save failure", () => {
+    // Pointer-drag math (deltaPx / pxPerMs) essentially never lands on an
+    // exact integer; the schema requires startMs to be one
+    // (z.number().int()), so an unrounded result here passed every local
+    // check but failed "Invalid composition: clips.N.startMs: Invalid
+    // input" the moment the drag was saved — confirmed live on a 30-clip
+    // timeline.
+    expect(clampMoveStartMs([], 1000, 5423.6789)).toBe(5424);
+  });
+
+  it("rounds the clamped result too, not just a candidate that already fits", () => {
+    const others = [{ startMs: 1000, durationMs: 3000 }]; // occupies [1000, 4000)
+    expect(clampMoveStartMs(others, 500, 3800.4)).toBe(4000);
+  });
 });
 
 describe("moveClip", () => {

@@ -309,8 +309,19 @@ export function removeAudioPatch(clips: Clip[], clipId: string, patchId: string)
 // drag (rather than only at save time) means every frame of the drag is
 // already a save-valid position, so there's never a moment where letting
 // go produces a validation error the user didn't see coming.
+//
+// Rounded to a whole millisecond before anything else: `candidateMs`
+// comes straight from pointer-drag pixel math (`deltaPx / pxPerMs`),
+// which is essentially never an integer — the schema requires one
+// (`z.number().int()`), so an unrounded value here reads as save-valid
+// on every frame of the drag but fails validation the moment it's
+// actually saved. Confirmed live: dragging a clip to a position that
+// didn't happen to snap to another clip's edge left it with a fractional
+// startMs, which then failed "Invalid composition: clips.N.startMs:
+// Invalid input" on save — silently, since nothing about the drag itself
+// looked wrong.
 export function clampMoveStartMs(others: { startMs: number; durationMs: number }[], durationMs: number, candidateMs: number): number {
-  const candidate = Math.max(0, candidateMs);
+  const candidate = Math.max(0, Math.round(candidateMs));
   const sorted = [...others].sort((a, b) => a.startMs - b.startMs);
 
   const gaps: { start: number; end: number }[] = [];
@@ -334,7 +345,7 @@ export function clampMoveStartMs(others: { startMs: number; durationMs: number }
   for (const gap of gaps) {
     if (gap.end - gap.start < durationMs) continue;
     const maxStartInGap = gap.end === Infinity ? Infinity : gap.end - durationMs;
-    const target = Math.min(Math.max(candidate, gap.start), maxStartInGap);
+    const target = Math.round(Math.min(Math.max(candidate, gap.start), maxStartInGap));
     const dist = Math.abs(target - candidate);
     if (dist < bestDist) {
       bestDist = dist;

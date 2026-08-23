@@ -321,8 +321,27 @@ export class RenderProcessor implements OnModuleDestroy {
       });
       proc.on("close", (code, signal) => {
         clearInterval(cancelTimer);
-        if (signal === "SIGTERM") return resolve(true);
+        if (signal === "SIGTERM") return resolve(true); // our own cancel path, not a failure
         if (code === 0) return resolve(false);
+        if (code === null) {
+          // The process was killed by a signal, not a normal exit — ffmpeg
+          // never got to print an error, so stderr just trails off mid-line
+          // (confirmed live: a 30-clip render died here at ~77% through,
+          // with nothing but progress lines in the tail). SIGKILL with no
+          // other explanation is almost always the Linux OOM killer: this
+          // renderer keeps one decoder+filter chain open per visual clip
+          // for the whole render (needed so clips on different tracks can
+          // freely overlap), so memory scales with clip *count*, not with
+          // how much is on screen at once — a long timeline with many
+          // clips can outgrow the host's RAM well before it finishes.
+          const hint =
+            signal === "SIGKILL"
+              ? " — most likely the server ran out of memory rendering this many clips at once, not a corrupt file or invalid setting"
+              : signal
+                ? ` (terminated by ${signal})`
+                : "";
+          return reject(new Error(`ffmpeg was killed before finishing${hint}. Last output: ${stderr.slice(-500) || "(none)"}`));
+        }
         reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`));
       });
     });
