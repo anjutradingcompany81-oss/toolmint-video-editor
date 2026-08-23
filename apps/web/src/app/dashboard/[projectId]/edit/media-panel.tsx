@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { deleteMedia, uploadMedia, type MediaAsset } from "@/lib/projects-api";
 import { ApiError } from "@/lib/api-client";
 import { compareBySerial } from "@/lib/composition-api";
@@ -23,9 +23,11 @@ interface MediaPanelProps {
   onAddToTimeline: (assetId: string) => void;
   /** Adds several audio files at once, in the given order. */
   onAddAudioBatch: (assetIds: string[]) => void;
+  /** Adds several video clips at once, in the given order. */
+  onAddVideoBatch: (assetIds: string[]) => void;
 }
 
-export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDeleted, onAddToTimeline, onAddAudioBatch }: MediaPanelProps) {
+export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDeleted, onAddToTimeline, onAddAudioBatch, onAddVideoBatch }: MediaPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [tasks, setTasks] = useState<UploadTask[]>([]);
@@ -34,13 +36,26 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
   // Uploads finish in whatever order the network returns them, so the media
   // list is not the order the files were named. Sorting by the number in
   // the filename is what makes "add them all" mean something predictable.
-  const audioInOrder = useMemo(
-    () =>
+  const readyInSerialOrder = useCallback(
+    (kind: MediaAsset["kind"]) =>
       media
-        .filter((m) => m.kind === "AUDIO" && m.status === "READY")
+        .filter((m) => m.kind === kind && m.status === "READY")
         .slice()
         .sort((a, b) => compareBySerial(a.originalName, b.originalName)),
     [media],
+  );
+  const audioInOrder = useMemo(() => readyInSerialOrder("AUDIO"), [readyInSerialOrder]);
+  const videoInOrder = useMemo(() => readyInSerialOrder("VIDEO"), [readyInSerialOrder]);
+
+  // Uploads finish in whatever order the network returns them, so the raw
+  // list has scenes in an order nobody chose — 09, 06, 04, 01, 02. Showing
+  // them by the number in the name is what makes a numbered set legible,
+  // and the toggle is there because "most recently added" is genuinely the
+  // more useful order while a batch is still being assembled.
+  const [sortBySerial, setSortBySerial] = useState(true);
+  const visibleMedia = useMemo(
+    () => (sortBySerial ? [...media].sort((a, b) => compareBySerial(a.originalName, b.originalName)) : media),
+    [media, sortBySerial],
   );
 
   async function uploadOne(file: File) {
@@ -127,37 +142,25 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
         )}
       </div>
 
-      {audioInOrder.length > 1 && (
-        <div className="border-b border-line bg-panel/60 p-3">
-          <p className="text-xs font-medium text-ink">{audioInOrder.length} audio files ready</p>
-          {/* The resolved order is shown before committing to it — the
-              whole point of the feature is that they land in the numbered
-              order, so the user should be able to check that first. */}
-          <ol className="mt-1.5 max-h-24 overflow-y-auto text-[11px] text-ink-muted">
-            {audioInOrder.map((asset, i) => (
-              <li key={asset.id} className="flex gap-1.5 truncate">
-                <span className="shrink-0 tabular-nums text-ink">{i + 1}.</span>
-                <span className="truncate" title={asset.originalName}>
-                  {asset.originalName}
-                </span>
-              </li>
-            ))}
-          </ol>
-          <button
-            onClick={() => onAddAudioBatch(audioInOrder.map((a) => a.id))}
-            className="mt-2 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-medium text-ink hover:bg-brand/90"
-          >
-            Add all {audioInOrder.length} to timeline, in this order
-          </button>
-        </div>
-      )}
+      {/* The resolved order is shown before committing to it — the whole
+          point is that they land in the numbered order, so it should be
+          checkable first. */}
+      <BulkAddBanner label="scenes" assets={videoInOrder} onAdd={() => onAddVideoBatch(videoInOrder.map((a) => a.id))} />
+      <BulkAddBanner label="audio files" assets={audioInOrder} onAdd={() => onAddAudioBatch(audioInOrder.map((a) => a.id))} />
 
       <div className="flex-1 overflow-y-auto p-3">
         {media.length === 0 ? (
           <p className="mt-4 text-center text-sm text-ink-muted">No media yet — upload a video to get started.</p>
         ) : (
+          <>
+            <div className="mb-2 flex items-center justify-between text-[11px] text-ink-muted">
+              <span>{media.length} files</span>
+              <button onClick={() => setSortBySerial((v) => !v)} className="rounded border border-line px-1.5 py-0.5 hover:border-brand">
+                {sortBySerial ? "By number" : "Newest first"}
+              </button>
+            </div>
           <ul className="flex flex-col gap-2">
-            {media.map((asset) => (
+            {visibleMedia.map((asset) => (
               <li key={asset.id} className="group flex flex-col gap-1.5 rounded-lg border border-line bg-panel p-2">
                 <div className="flex gap-2">
                   <MediaThumb asset={asset} className="h-14 w-24 shrink-0 rounded object-cover" />
@@ -200,8 +203,36 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
               </li>
             ))}
           </ul>
+          </>
         )}
       </div>
     </aside>
+  );
+}
+
+// Offers a whole set of same-kind media as one ordered batch. Only shown
+// for two or more, since "add all" of a single file is just the button
+// already on that file's row.
+function BulkAddBanner({ label, assets, onAdd }: { label: string; assets: MediaAsset[]; onAdd: () => void }) {
+  if (assets.length < 2) return null;
+  return (
+    <div className="border-b border-line bg-panel/60 p-3">
+      <p className="text-xs font-medium text-ink">
+        {assets.length} {label} ready
+      </p>
+      <ol className="mt-1.5 max-h-24 overflow-y-auto text-[11px] text-ink-muted">
+        {assets.map((asset, i) => (
+          <li key={asset.id} className="flex gap-1.5 truncate">
+            <span className="shrink-0 tabular-nums text-ink">{i + 1}.</span>
+            <span className="truncate" title={asset.originalName}>
+              {asset.originalName}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <button onClick={onAdd} className="mt-2 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-medium text-ink hover:bg-brand/90">
+        Add all {assets.length} to timeline, in this order
+      </button>
+    </div>
   );
 }

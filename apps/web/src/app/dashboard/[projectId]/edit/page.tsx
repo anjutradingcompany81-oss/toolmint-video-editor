@@ -234,6 +234,32 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     [withClips, trackId, mediaById, appendAudioClips],
   );
 
+  // Adds a whole batch of scenes in one action, in the order the panel
+  // resolved (numeric by filename), laid end to end after whatever is
+  // already on the track. One call means one history entry and one save -
+  // and, more to the point, the order cannot drift the way it does when
+  // someone adds a dozen numbered scenes by hand.
+  const addVideoBatchToTimeline = useCallback(
+    (assetIds: string[]) => {
+      const durations = assetIds.map((id) => ({ id, durationMs: mediaById.get(id)?.durationMs ?? 0 })).filter((a) => a.durationMs > 0);
+      if (durations.length === 0) {
+        setMessage({ text: "Those clips haven't finished processing yet.", tone: "error" });
+        return;
+      }
+      withClips((prev) => {
+        let cursor = prev.reduce((max, c) => Math.max(max, c.startMs + c.durationMs), 0);
+        const added = durations.map(({ id, durationMs }) => {
+          const clip = newVideoClip(trackId!, id, cursor, durationMs);
+          cursor += clip.durationMs;
+          return clip;
+        });
+        return [...prev, ...added];
+      });
+      setMessage({ text: `Added ${durations.length} scene${durations.length === 1 ? "" : "s"} to the timeline, in order.`, tone: "success" });
+    },
+    [mediaById, withClips, trackId],
+  );
+
   // Adds a whole batch of audio files in one action, in the order the panel
   // resolved (numeric by filename). Doing it as one call means one history
   // entry and one save, and — more importantly — the order can't drift the
@@ -609,6 +635,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onMediaDeleted={(id) => setMedia((prev) => prev.filter((m) => m.id !== id))}
           onAddToTimeline={addToTimeline}
           onAddAudioBatch={addAudioBatchToTimeline}
+          onAddVideoBatch={addVideoBatchToTimeline}
         />
 
         <div className="flex flex-1 flex-col overflow-hidden">
