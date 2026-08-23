@@ -23,6 +23,11 @@ import {
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
 
 const SAVE_DEBOUNCE_MS = 1500;
+// These names identify the two managed audio tracks. They are matched on
+// load, so renaming one here would orphan the clips already saved under
+// the old name.
+const VOICE_OVER_TRACK_NAME = "Voice over";
+const AUDIO_TRACK_NAME = "Audio";
 // Drag/trim gestures call withClips on every pointermove — dozens of times
 // for one visual action. Without this, undo would take 40 presses to
 // reverse a single drag. Edits arriving within this window of the previous
@@ -64,6 +69,11 @@ export function useCompositionEditor(projectId: string) {
   // drag the voice over along with it.
   const [voiceOverTrackId, setVoiceOverTrackId] = useState<string | null>(null);
   const [voiceOverClips, setVoiceOverClips] = useState<MediaClip[]>([]);
+  // Uploaded audio (music, narration files) gets its own track, kept apart
+  // from the generated voice over so regenerating a voice over can't wipe
+  // audio the user brought in themselves.
+  const [audioTrackId, setAudioTrackId] = useState<string | null>(null);
+  const [audioClips, setAudioClips] = useState<MediaClip[]>([]);
   // Regions of the original footage to erase on export. Like captions
   // these are timeline-level data rather than clips, and like captions
   // they're carried through every save so a clip edit can't drop them.
@@ -86,6 +96,8 @@ export function useCompositionEditor(projectId: string) {
   const overlayTrackIdRef = useRef(overlayTrackId);
   const voiceOverTrackIdRef = useRef(voiceOverTrackId);
   const voiceOverClipsRef = useRef(voiceOverClips);
+  const audioTrackIdRef = useRef(audioTrackId);
+  const audioClipsRef = useRef(audioClips);
   const watermarkRemovalsRef = useRef(watermarkRemovals);
   const subtitlesRef = useRef(subtitles);
   const subtitleStyleRef = useRef(subtitleStyle);
@@ -97,10 +109,25 @@ export function useCompositionEditor(projectId: string) {
     overlayTrackIdRef.current = overlayTrackId;
     voiceOverTrackIdRef.current = voiceOverTrackId;
     voiceOverClipsRef.current = voiceOverClips;
+    audioTrackIdRef.current = audioTrackId;
+    audioClipsRef.current = audioClips;
     watermarkRemovalsRef.current = watermarkRemovals;
     subtitlesRef.current = subtitles;
     subtitleStyleRef.current = subtitleStyle;
-  }, [clips, overlayClips, timeline, trackId, overlayTrackId, voiceOverTrackId, voiceOverClips, watermarkRemovals, subtitles, subtitleStyle]);
+  }, [
+    clips,
+    overlayClips,
+    timeline,
+    trackId,
+    overlayTrackId,
+    voiceOverTrackId,
+    voiceOverClips,
+    audioTrackId,
+    audioClips,
+    watermarkRemovals,
+    subtitles,
+    subtitleStyle,
+  ]);
 
   // Undo snapshots BOTH tracks together, so undoing a logo placement can't
   // leave the video track from a different point in history (and vice
@@ -147,7 +174,11 @@ export function useCompositionEditor(projectId: string) {
         // Same laziness for narration. Matched by kind rather than by
         // name so renaming the track in a future multitrack UI can't
         // orphan the voice over the user already generated.
-        const voiceOverTrack = loadedTimeline.tracks.find((t) => t.kind === "audio") ?? null;
+        // Matched by name, not just kind: there are now two audio tracks
+        // with different lifecycles, and picking whichever came first would
+        // let a voice-over regeneration replace the user's own audio.
+        const voiceOverTrack = loadedTimeline.tracks.find((t) => t.kind === "audio" && t.name === VOICE_OVER_TRACK_NAME) ?? null;
+        const audioTrack = loadedTimeline.tracks.find((t) => t.kind === "audio" && t.name === AUDIO_TRACK_NAME) ?? null;
 
         setProject(proj);
         setTimeline(loadedTimeline);
@@ -157,6 +188,8 @@ export function useCompositionEditor(projectId: string) {
         setOverlayClips(overlayTrack ? clipsOnTrack(loadedTimeline.clips, overlayTrack.id) : []);
         setVoiceOverTrackId(voiceOverTrack?.id ?? null);
         setVoiceOverClips(voiceOverTrack ? clipsOnTrack(loadedTimeline.clips, voiceOverTrack.id) : []);
+        setAudioTrackId(audioTrack?.id ?? null);
+        setAudioClips(audioTrack ? clipsOnTrack(loadedTimeline.clips, audioTrack.id) : []);
         // Projects saved before captions existed have neither field.
         setWatermarkRemovals(loadedTimeline.watermarkRemovals ?? []);
         setSubtitles(loadedTimeline.subtitles ?? []);
@@ -194,6 +227,7 @@ export function useCompositionEditor(projectId: string) {
       captions?: { subtitles: SubtitleCue[]; subtitleStyle: SubtitleStyle },
       nextVoiceOverClips?: MediaClip[],
       nextWatermarkRemovals?: WatermarkRegion[],
+      nextAudioClips?: MediaClip[],
     ) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -208,17 +242,18 @@ export function useCompositionEditor(projectId: string) {
           // on any track this editor doesn't manage are carried through
           // unchanged.
           const managedTrackIds = new Set(
-            [currentTrackId, overlayTrackIdRef.current, voiceOverTrackIdRef.current].filter(Boolean) as string[],
+            [currentTrackId, overlayTrackIdRef.current, voiceOverTrackIdRef.current, audioTrackIdRef.current].filter(Boolean) as string[],
           );
           const otherClips = current.clips.filter((c) => !managedTrackIds.has(c.trackId));
           // Carried through on every save, exactly like captions, so an
           // unrelated clip edit can't drop the narration off the timeline.
           const voiceOver = nextVoiceOverClips ?? voiceOverClipsRef.current;
+          const audio = nextAudioClips ?? audioClipsRef.current;
           const tracks = [...current.tracks, ...extraTracks.filter((t) => !current.tracks.some((existing) => existing.id === t.id))];
           const payload: Timeline = {
             ...current,
             tracks,
-            clips: [...otherClips, ...nextClips, ...nextOverlayClips, ...voiceOver],
+            clips: [...otherClips, ...nextClips, ...nextOverlayClips, ...voiceOver, ...audio],
             // Captions are only overwritten by an edit that actually
             // changed them; every other save carries the current ones
             // through so a clip edit can't wipe the script.
@@ -323,7 +358,7 @@ export function useCompositionEditor(projectId: string) {
       targetTrackId = existingTrackId;
     } else {
       const highestOrder = current.tracks.reduce((max, t) => Math.max(max, t.order), 0);
-      const track = newAudioTrack("Voice over", highestOrder + 1);
+      const track = newAudioTrack(VOICE_OVER_TRACK_NAME, highestOrder + 1);
       targetTrackId = track.id;
       newTracks.push(track);
       setVoiceOverTrackId(track.id);
@@ -337,6 +372,49 @@ export function useCompositionEditor(projectId: string) {
     setVoiceOverClips(next);
     voiceOverClipsRef.current = next;
     scheduleSave(clipsRef.current, overlayClipsRef.current, newTracks, undefined, next);
+  }
+
+  // Appends uploaded audio to the audio track, back to back, starting
+  // after whatever is already there. Called with a whole batch so a set of
+  // numbered files lands in one action and in one save, rather than the
+  // user adding them one at a time and hoping the order holds.
+  function appendAudioClips(items: { mediaAssetId: string; durationMs: number }[]) {
+    const current = timelineRef.current;
+    if (!current || items.length === 0) return;
+
+    const existingTrackId = audioTrackIdRef.current;
+    const newTracks: Track[] = [];
+    let targetTrackId: string;
+    if (existingTrackId) {
+      targetTrackId = existingTrackId;
+    } else {
+      const highestOrder = current.tracks.reduce((max, t) => Math.max(max, t.order), 0);
+      const track = newAudioTrack(AUDIO_TRACK_NAME, highestOrder + 1);
+      targetTrackId = track.id;
+      newTracks.push(track);
+      setAudioTrackId(track.id);
+      audioTrackIdRef.current = track.id;
+    }
+
+    const existing = audioClipsRef.current;
+    let cursor = existing.reduce((end, c) => Math.max(end, c.startMs + c.durationMs), 0);
+    const added = items.map((item) => {
+      const clip = newAudioClip(targetTrackId, item.mediaAssetId, cursor, Math.max(1, item.durationMs));
+      cursor += Math.max(1, item.durationMs);
+      return clip;
+    });
+
+    const next = [...existing, ...added];
+    setAudioClips(next);
+    audioClipsRef.current = next;
+    scheduleSave(clipsRef.current, overlayClipsRef.current, newTracks, undefined, undefined, undefined, next);
+  }
+
+  function removeAudioClip(clipId: string) {
+    const next = audioClipsRef.current.filter((c) => c.id !== clipId);
+    setAudioClips(next);
+    audioClipsRef.current = next;
+    scheduleSave(clipsRef.current, overlayClipsRef.current, [], undefined, undefined, undefined, next);
   }
 
   function removeVoiceOver() {
@@ -400,6 +478,10 @@ export function useCompositionEditor(projectId: string) {
     voiceOverClips,
     placeVoiceOver,
     removeVoiceOver,
+    audioTrackId,
+    audioClips,
+    appendAudioClips,
+    removeAudioClip,
     watermarkRemovals,
     updateWatermarkRemovals,
     subtitles,

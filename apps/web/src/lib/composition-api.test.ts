@@ -14,6 +14,7 @@ import {
   splitClip,
   trimClipOnTrack,
   type MediaClip,
+  compareBySerial,
   fitContainRect,
   clampLogoPosition,
   positionOverlayClip,
@@ -689,5 +690,45 @@ describe("removeRangeOnTrack keeps the cut clip's own length", () => {
     for (let i = 1; i < sorted.length; i++) {
       expect(sorted[i]!.startMs).toBeGreaterThanOrEqual(sorted[i - 1]!.startMs + sorted[i - 1]!.durationMs);
     }
+  });
+});
+
+describe("compareBySerial", () => {
+  const sort = (names: string[]) => [...names].sort(compareBySerial);
+
+  it("orders past nine the way a person numbers files, not the way strings sort", () => {
+    // Plain sort() gives 1, 10, 11, 2 — which silently scrambles any
+    // numbered set as soon as it grows past nine files.
+    expect(sort(["clip10.mp3", "clip2.mp3", "clip1.mp3", "clip11.mp3"])).toEqual([
+      "clip1.mp3",
+      "clip2.mp3",
+      "clip10.mp3",
+      "clip11.mp3",
+    ]);
+  });
+
+  it("handles zero-padded numbering", () => {
+    expect(sort(["track_03.wav", "track_01.wav", "track_10.wav", "track_02.wav"])).toEqual([
+      "track_01.wav",
+      "track_02.wav",
+      "track_03.wav",
+      "track_10.wav",
+    ]);
+  });
+
+  it("mixes padded and unpadded numbers of the same value sensibly", () => {
+    expect(sort(["2.mp3", "10.mp3", "1.mp3"])).toEqual(["1.mp3", "2.mp3", "10.mp3"]);
+  });
+
+  it("falls back to plain alphabetical order when there are no numbers", () => {
+    expect(sort(["intro.mp3", "bridge.mp3", "outro.mp3"])).toEqual(["bridge.mp3", "intro.mp3", "outro.mp3"]);
+  });
+
+  it("ignores case differences so Track2 and track10 still order numerically", () => {
+    expect(sort(["Track10.mp3", "track2.mp3"])).toEqual(["track2.mp3", "Track10.mp3"]);
+  });
+
+  it("orders by the number even when the words before it differ in length", () => {
+    expect(sort(["scene 9 - end.wav", "scene 10 - start.wav"])).toEqual(["scene 9 - end.wav", "scene 10 - start.wav"]);
   });
 });

@@ -64,6 +64,9 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     clips,
     overlayClips,
     withOverlayClips,
+    audioClips,
+    appendAudioClips,
+    removeAudioClip,
     watermarkRemovals,
     updateWatermarkRemovals,
     voiceOverClips,
@@ -156,7 +159,16 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   // Math.max over every entry, not just the last one post-sort — a clip
   // with a later startMs isn't guaranteed to also have the later *end*
   // once clips can leave gaps or (on a different track) run concurrently.
-  const totalDurationMs = layout.reduce((max, e) => Math.max(max, e.startMs + e.durationMs), 0);
+  // Audio counts towards the timeline length too. Measuring the video
+  // track alone made the scrub bar and preview stop early whenever a music
+  // or narration track ran past the picture — while the export, which
+  // measures every clip, kept going. Preview and export must agree on how
+  // long the video is.
+  const totalDurationMs = Math.max(
+    layout.reduce((max, e) => Math.max(max, e.startMs + e.durationMs), 0),
+    audioClips.reduce((max, c) => Math.max(max, c.startMs + c.durationMs), 0),
+    voiceOverClips.reduce((max, c) => Math.max(max, c.startMs + c.durationMs), 0),
+  );
 
   // The render canvas takes its shape from the first video clip's source
   // (see computeDimensions in merge-ffmpeg.util.ts). Mirroring that here
@@ -190,13 +202,43 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const addToTimeline = useCallback(
     (assetId: string) => {
       if (!trackId) return;
-      const sourceDurationMs = mediaById.get(assetId)?.durationMs ?? 0;
+      const asset = mediaById.get(assetId);
+      const sourceDurationMs = asset?.durationMs ?? 0;
+      // Audio belongs on the audio track. It used to be added as a
+      // video-kind clip on the video track, which the render pipeline then
+      // fed to ffmpeg as a picture source — an mp3 has no picture, so the
+      // export was broken by the act of adding a music file.
+      if (asset?.kind === "AUDIO") {
+        appendAudioClips([{ mediaAssetId: assetId, durationMs: sourceDurationMs }]);
+        setMessage({ text: `"${asset.originalName}" added to the audio track.`, tone: "success" });
+        return;
+      }
       withClips((prev) => {
         const endMs = prev.reduce((max, c) => Math.max(max, c.startMs + c.durationMs), 0);
         return [...prev, newVideoClip(trackId, assetId, endMs, sourceDurationMs)];
       });
     },
-    [withClips, trackId, mediaById],
+    [withClips, trackId, mediaById, appendAudioClips],
+  );
+
+  // Adds a whole batch of audio files in one action, in the order the panel
+  // resolved (numeric by filename). Doing it as one call means one history
+  // entry and one save, and — more importantly — the order can't drift the
+  // way it does when a user adds nine files by hand.
+  const addAudioBatchToTimeline = useCallback(
+    (assetIds: string[]) => {
+      const items = assetIds
+        .map((id) => mediaById.get(id))
+        .filter((a): a is NonNullable<typeof a> => Boolean(a) && a!.durationMs != null)
+        .map((a) => ({ mediaAssetId: a.id, durationMs: a.durationMs! }));
+      if (items.length === 0) {
+        setMessage({ text: "Those audio files haven't finished processing yet.", tone: "error" });
+        return;
+      }
+      appendAudioClips(items);
+      setMessage({ text: `Added ${items.length} audio file${items.length === 1 ? "" : "s"} to the timeline, in order.`, tone: "success" });
+    },
+    [mediaById, appendAudioClips],
   );
 
   // Routed through trimClipOnTrack so the clip's durationMs (and, for a
@@ -534,6 +576,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onMediaAdded={(asset) => setMedia((prev) => [asset, ...prev])}
           onMediaDeleted={(id) => setMedia((prev) => prev.filter((m) => m.id !== id))}
           onAddToTimeline={addToTimeline}
+          onAddAudioBatch={addAudioBatchToTimeline}
         />
 
         <div className="flex flex-1 flex-col overflow-hidden">
@@ -573,6 +616,9 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           />
 
           <TimelinePanel
+            audioClips={audioClips}
+            audioNameOf={(id: string) => mediaById.get(id)?.originalName ?? "Audio"}
+            onRemoveAudioClip={removeAudioClip}
             layout={layout}
             totalDurationMs={totalDurationMs}
             playheadMs={player.playheadMs}

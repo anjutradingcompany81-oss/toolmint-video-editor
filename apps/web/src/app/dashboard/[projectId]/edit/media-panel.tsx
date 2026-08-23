@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState, type DragEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import { deleteMedia, uploadMedia, type MediaAsset } from "@/lib/projects-api";
 import { ApiError } from "@/lib/api-client";
+import { compareBySerial } from "@/lib/composition-api";
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import MediaThumb from "./media-thumb";
 import { formatBytes, formatResolution, formatTimecode } from "./format";
@@ -20,13 +21,27 @@ interface MediaPanelProps {
   onMediaAdded: (asset: MediaAsset) => void;
   onMediaDeleted: (id: string) => void;
   onAddToTimeline: (assetId: string) => void;
+  /** Adds several audio files at once, in the given order. */
+  onAddAudioBatch: (assetIds: string[]) => void;
 }
 
-export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDeleted, onAddToTimeline }: MediaPanelProps) {
+export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDeleted, onAddToTimeline, onAddAudioBatch }: MediaPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [tasks, setTasks] = useState<UploadTask[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Uploads finish in whatever order the network returns them, so the media
+  // list is not the order the files were named. Sorting by the number in
+  // the filename is what makes "add them all" mean something predictable.
+  const audioInOrder = useMemo(
+    () =>
+      media
+        .filter((m) => m.kind === "AUDIO" && m.status === "READY")
+        .slice()
+        .sort((a, b) => compareBySerial(a.originalName, b.originalName)),
+    [media],
+  );
 
   async function uploadOne(file: File) {
     const key = `${file.name}-${file.size}-${Date.now()}`;
@@ -111,6 +126,31 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
           </ul>
         )}
       </div>
+
+      {audioInOrder.length > 1 && (
+        <div className="border-b border-line bg-panel/60 p-3">
+          <p className="text-xs font-medium text-ink">{audioInOrder.length} audio files ready</p>
+          {/* The resolved order is shown before committing to it — the
+              whole point of the feature is that they land in the numbered
+              order, so the user should be able to check that first. */}
+          <ol className="mt-1.5 max-h-24 overflow-y-auto text-[11px] text-ink-muted">
+            {audioInOrder.map((asset, i) => (
+              <li key={asset.id} className="flex gap-1.5 truncate">
+                <span className="shrink-0 tabular-nums text-ink">{i + 1}.</span>
+                <span className="truncate" title={asset.originalName}>
+                  {asset.originalName}
+                </span>
+              </li>
+            ))}
+          </ol>
+          <button
+            onClick={() => onAddAudioBatch(audioInOrder.map((a) => a.id))}
+            className="mt-2 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-medium text-ink hover:bg-brand/90"
+          >
+            Add all {audioInOrder.length} to timeline, in this order
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-3">
         {media.length === 0 ? (

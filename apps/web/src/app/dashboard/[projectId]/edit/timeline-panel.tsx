@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClipLayoutEntry } from "@/lib/use-timeline-player";
+import type { MediaClip } from "@/lib/composition-api";
 import TimelineClipBlock from "./timeline-clip-block";
 import { formatTimecode } from "./format";
 import { CopyIcon, PlusIcon, ScissorsIcon, TrashIcon } from "@/components/icons";
@@ -98,6 +99,10 @@ interface TimelinePanelProps {
   onAdjustMarkOut: (ms: number) => void;
   onCutSelection: () => void;
   razorMode: boolean;
+  /** Clips on the uploaded-audio track, drawn in their own lane. */
+  audioClips: MediaClip[];
+  audioNameOf: (mediaAssetId: string) => string;
+  onRemoveAudioClip: (clipId: string) => void;
   onToggleRazorMode: () => void;
   onRazorClick: (ms: number) => void;
   // AI Repetitive Voice Remover: colored indicators over detected
@@ -213,6 +218,9 @@ export default function TimelinePanel({
   onAdjustMarkOut,
   onCutSelection,
   razorMode,
+  audioClips,
+  audioNameOf,
+  onRemoveAudioClip,
   onToggleRazorMode,
   onRazorClick,
   voiceMarkers = [],
@@ -454,7 +462,11 @@ export default function TimelinePanel({
         </div>
       </div>
 
-      {layout.length === 0 ? (
+      {/* Audio-only counts as a timeline. Keying the empty state on the
+          video track alone hid a whole batch of uploaded audio behind
+          "add some media" — the clips were saved and would export, but the
+          editor showed nothing at all. */}
+      {layout.length === 0 && audioClips.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 text-ink-muted">
           <PlusIcon width={20} height={20} />
           <p className="text-sm">Add media from the left panel to build your timeline</p>
@@ -520,6 +532,41 @@ export default function TimelinePanel({
                 />
               ))}
             </div>
+
+            {/* Uploaded audio gets its own lane. Without it a batch of
+                audio files would be added, saved and exported while being
+                completely invisible on the timeline — the user would have
+                no way to see what they had, or in what order. */}
+            {audioClips.length > 0 && (
+              <div className="relative mt-1 h-11 rounded bg-panel/40">
+                {audioClips.map((clip, i) => (
+                  <div
+                    key={clip.id}
+                    title={`${i + 1}. ${audioNameOf(clip.mediaAssetId)} — ${formatTimecode(clip.startMs)} to ${formatTimecode(clip.startMs + clip.durationMs)}`}
+                    onClick={() => onSeek(clip.startMs)}
+                    style={{
+                      position: "absolute",
+                      left: (clip.startMs / 1000) * pixelsPerSecond,
+                      width: Math.max(6, (clip.durationMs / 1000) * pixelsPerSecond),
+                    }}
+                    className="group/audio top-0 flex h-full cursor-pointer items-center gap-1 overflow-hidden rounded border border-brand/40 bg-brand/20 px-1.5 hover:border-brand"
+                  >
+                    <span className="shrink-0 rounded bg-brand/30 px-1 text-[10px] tabular-nums text-ink">{i + 1}</span>
+                    <span className="truncate text-[10px] text-ink">{audioNameOf(clip.mediaAssetId)}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveAudioClip(clip.id);
+                      }}
+                      title="Remove this audio clip"
+                      className="ml-auto shrink-0 opacity-0 transition-opacity group-hover/audio:opacity-100"
+                    >
+                      <TrashIcon width={11} height={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Unwanted-section selection: highlighted range with
                 draggable edge handles, shown as soon as In is marked

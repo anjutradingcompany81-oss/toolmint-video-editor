@@ -448,6 +448,20 @@ export function newVideoTrack(name: string, order: number): Track {
 // being mixed into the source clips: the source stays untouched (this is a
 // non-destructive editor), the user can mute or delete the narration in
 // one action, and regenerating just replaces this track's contents.
+// Orders files the way a person numbers them, so "clip2" comes before
+// "clip10" instead of after it. Plain string sorting compares digit by
+// digit, which puts 10 before 2 and scrambles any numbered set the moment
+// it passes nine files.
+//
+// Intl.Collator with numeric:true is the built-in that gets this right
+// (including padded forms like 01, 02) rather than hand-rolling a parser
+// that has to guess which number in a name is the index.
+const serialCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+export function compareBySerial(a: string, b: string): number {
+  return serialCollator.compare(a, b);
+}
+
 export function newAudioTrack(name: string, order: number): Track {
   return { id: randomId("track"), kind: "audio", name, order, locked: false, hidden: false, muted: false, solo: false };
 }
