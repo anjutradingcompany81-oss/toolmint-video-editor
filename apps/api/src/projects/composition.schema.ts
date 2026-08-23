@@ -177,6 +177,8 @@ export const watermarkRegionSchema = z.object({
   y: z.number().int().nonnegative(),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
+  // Defaulted so regions saved before the other modes existed keep working.
+  mode: z.enum(["RECONSTRUCT", "BLUR", "PIXELATE"]).default("RECONSTRUCT"),
 });
 export type WatermarkRegionInput = z.infer<typeof watermarkRegionSchema>;
 

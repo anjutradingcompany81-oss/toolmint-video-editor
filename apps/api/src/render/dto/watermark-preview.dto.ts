@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsInt, IsString, Min, MinLength, ValidateNested } from "class-validator";
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Min, MinLength, ValidateNested } from "class-validator";
 
 export class WatermarkRegionDto {
   @IsString()
@@ -21,6 +21,10 @@ export class WatermarkRegionDto {
   @IsInt()
   @Min(1)
   height!: number;
+
+  @IsOptional()
+  @IsIn(["RECONSTRUCT", "BLUR", "PIXELATE"])
+  mode?: "RECONSTRUCT" | "BLUR" | "PIXELATE";
 }
 
 export class WatermarkPreviewDto {

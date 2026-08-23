@@ -101,12 +101,19 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
 // A rectangle of the original footage to erase on export. Canvas pixels,
 // like overlay positions, so what is marked on the preview is what the
 // renderer removes.
+// RECONSTRUCT rebuilds the covered area from its surroundings (invisible
+// over flat backgrounds, a smear over busy detail); BLUR and PIXELATE
+// obscure it instead, which reads as a deliberate edit on footage where
+// reconstruction can't win.
+export type WatermarkMode = "RECONSTRUCT" | "BLUR" | "PIXELATE";
+
 export interface WatermarkRegion {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
+  mode: WatermarkMode;
 }
 
 export interface Timeline {
@@ -119,8 +126,8 @@ export interface Timeline {
   updatedAt: string;
 }
 
-export function newWatermarkRegion(x: number, y: number, width: number, height: number): WatermarkRegion {
-  return { id: randomId("wm"), x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+export function newWatermarkRegion(x: number, y: number, width: number, height: number, mode: WatermarkMode = "RECONSTRUCT"): WatermarkRegion {
+  return { id: randomId("wm"), x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height), mode };
 }
 
 export function newSubtitleCue(startMs: number, endMs: number, text: string): SubtitleCue {

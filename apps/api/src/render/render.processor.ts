@@ -13,6 +13,7 @@ import { compositionSchema, type Clip, type Track } from "../projects/compositio
 import { RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.constants";
 import { buildMultitrackMergeArgs, computeDimensions, type AudioClipSegment, type Resolution, type VisualClipSegment } from "./merge-ffmpeg.util";
 import { escapeSubtitlePath, toForceStyle, toSrt } from "./subtitles.util";
+import { canvasToOutputScale, scaleWatermarkRegion } from "./watermark.util";
 
 // How often the worker checks whether the user clicked Cancel while ffmpeg
 // is running — not instant, but bounded, and cheap enough not to matter at
@@ -176,8 +177,35 @@ export class RenderProcessor implements OnModuleDestroy {
         }
       }
 
+      // Everything the editor positions — logo overlays, watermark boxes —
+      // is stored in CANVAS pixels, i.e. the first clip's source size.
+      // That only equals the export canvas for an "Original" export, so
+      // any other resolution has to carry the geometry across: without
+      // this a logo drifts off its corner and a watermark box erases clean
+      // picture while leaving the mark itself untouched.
+      const canvasScale = canvasToOutputScale(
+        { width: baseAsset.width ?? width, height: baseAsset.height ?? height },
+        { width, height },
+      );
+      const scaledVisualClips = visualClips.map((clip) =>
+        clip.kind === "overlay"
+          ? {
+              ...clip,
+              transform: {
+                ...clip.transform,
+                x: clip.transform.x * canvasScale.x,
+                y: clip.transform.y * canvasScale.y,
+                // Scaled on X only — using both axes would stretch a logo
+                // out of shape whenever the export aspect differs at all.
+                scale: clip.transform.scale * canvasScale.x,
+              },
+            }
+          : clip,
+      );
+      const scaledRemovals = timeline.watermarkRemovals.map((region) => scaleWatermarkRegion(region, canvasScale));
+
       const args = buildMultitrackMergeArgs({
-        visualClips,
+        visualClips: scaledVisualClips,
         audioClips,
         width,
         height,
@@ -185,7 +213,7 @@ export class RenderProcessor implements OnModuleDestroy {
         totalDurationMs,
         quality: exportJob.quality,
         outputPath,
-        watermarkRemovals: timeline.watermarkRemovals,
+        watermarkRemovals: scaledRemovals,
         burnedSubtitles,
       });
 

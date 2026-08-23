@@ -95,12 +95,16 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [markOutMs, setMarkOutMs] = useState<number | null>(null);
   const [razorMode, setRazorMode] = useState(false);
   const [message, setMessage] = useState<EditorMessage | null>(null);
-  const [voiceCorrectionOpen, setVoiceCorrectionOpen] = useState(false);
-  const [logoOpen, setLogoOpen] = useState(false);
-  const [subtitlesOpen, setSubtitlesOpen] = useState(false);
-  const [voiceOverOpen, setVoiceOverOpen] = useState(false);
+  // One panel at a time. These are all absolutely positioned over the same
+  // strip on the right, so opening a second used to stack it on top of the
+  // first while every button still showed as active — the timeline looked
+  // like five tools were running at once. A single value makes opening one
+  // close the others, and clicking the same button again closes it.
+  type PanelId = "subtitles" | "watermark" | "logo" | "voiceOver" | "voiceCorrection";
+  const [activePanel, setActivePanel] = useState<PanelId | null>(null);
+  const togglePanel = useCallback((panel: PanelId) => setActivePanel((current) => (current === panel ? null : panel)), []);
+  const closePanel = useCallback(() => setActivePanel(null), []);
   const [selectedLogoId, setSelectedLogoId] = useState<string | null>(null);
-  const [watermarkOpen, setWatermarkOpen] = useState(false);
   const [selectedWatermarkId, setSelectedWatermarkId] = useState<string | null>(null);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
@@ -511,16 +515,16 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         onRedo={redo}
         onExport={() => setExportOpen(true)}
         exportDisabled={clips.length === 0}
-        onToggleVoiceCorrection={() => setVoiceCorrectionOpen((v) => !v)}
-        voiceCorrectionOpen={voiceCorrectionOpen}
-        onToggleLogo={() => setLogoOpen((v) => !v)}
-        logoOpen={logoOpen}
-        onToggleSubtitles={() => setSubtitlesOpen((v) => !v)}
-        subtitlesOpen={subtitlesOpen}
-        onToggleVoiceOver={() => setVoiceOverOpen((v) => !v)}
-        voiceOverOpen={voiceOverOpen}
-        onToggleWatermark={() => setWatermarkOpen((v) => !v)}
-        watermarkOpen={watermarkOpen}
+        onToggleVoiceCorrection={() => togglePanel("voiceCorrection")}
+        voiceCorrectionOpen={activePanel === "voiceCorrection"}
+        onToggleLogo={() => togglePanel("logo")}
+        logoOpen={activePanel === "logo"}
+        onToggleSubtitles={() => togglePanel("subtitles")}
+        subtitlesOpen={activePanel === "subtitles"}
+        onToggleVoiceOver={() => togglePanel("voiceOver")}
+        voiceOverOpen={activePanel === "voiceOver"}
+        onToggleWatermark={() => togglePanel("watermark")}
+        watermarkOpen={activePanel === "watermark"}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -611,8 +615,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
 
         <WatermarkPanel
-          open={watermarkOpen}
-          onClose={() => setWatermarkOpen(false)}
+          open={activePanel === "watermark"}
+          onClose={closePanel}
           projectId={projectId}
           regions={watermarkRemovals}
           onChange={updateWatermarkRemovals}
@@ -625,8 +629,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
 
         <LogoPanel
-          open={logoOpen}
-          onClose={() => setLogoOpen(false)}
+          open={activePanel === "logo"}
+          onClose={closePanel}
           images={media.filter((m) => m.kind === "IMAGE" && m.status === "READY")}
           overlayClips={overlayClips}
           mediaById={mediaById}
@@ -639,8 +643,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
 
         <SubtitlesPanel
-          open={subtitlesOpen}
-          onClose={() => setSubtitlesOpen(false)}
+          open={activePanel === "subtitles"}
+          onClose={closePanel}
           projectId={projectId}
           subtitles={subtitles}
           subtitleStyle={subtitleStyle}
@@ -649,8 +653,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
 
         <VoiceOverPanel
-          open={voiceOverOpen}
-          onClose={() => setVoiceOverOpen(false)}
+          open={activePanel === "voiceOver"}
+          onClose={closePanel}
           projectId={projectId}
           onSeek={player.seekTo}
           hasVoiceOverOnTimeline={voiceOverClips.length > 0}
@@ -665,8 +669,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
 
         <VoiceCorrectionPanel
-          open={voiceCorrectionOpen}
-          onClose={() => setVoiceCorrectionOpen(false)}
+          open={activePanel === "voiceCorrection"}
+          onClose={closePanel}
           projectId={projectId}
           trackId={trackId}
           clips={clips}

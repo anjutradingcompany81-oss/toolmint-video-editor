@@ -9,7 +9,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { ProjectsService } from "../projects/projects.service";
 import { compositionSchema, type Clip } from "../projects/composition.schema";
-import { buildDelogoFilter, type WatermarkRegion } from "./watermark.util";
+import { buildWatermarkFilterParts, type WatermarkRegion } from "./watermark.util";
 
 // Renders ONE frame with the watermark-removal filter applied, so the
 // result can be seen before committing to a full export.
@@ -68,10 +68,14 @@ export class WatermarkPreviewService {
       await this.storage.downloadToFile(asset.storageKey, sourcePath);
 
       const outPath = join(workDir, "frame.png");
-      const filter = buildDelogoFilter(regions, { width: canvasWidth, height: canvasHeight });
-      // scale first so the regions' canvas coordinates line up, then
-      // delogo - the same order the export pipeline composites in.
-      const vf = `scale=${canvasWidth}:${canvasHeight}${filter ? `,${filter}` : ""}`;
+      // Scale to the canvas first so the regions' coordinates line up, then
+      // run the very same graph builder the export uses - a preview drawn
+      // any other way could disagree with the finished file.
+      const parts = buildWatermarkFilterParts(regions, { width: canvasWidth, height: canvasHeight }, "scaled", "out");
+      const graph =
+        parts.length > 0
+          ? `[0:v]scale=${canvasWidth}:${canvasHeight}[scaled];${parts.join(";")}`
+          : `[0:v]scale=${canvasWidth}:${canvasHeight}[out]`;
 
       await this.runFfmpeg([
         "-y",
@@ -83,8 +87,10 @@ export class WatermarkPreviewService {
         sourcePath,
         "-frames:v",
         "1",
-        "-vf",
-        vf,
+        "-filter_complex",
+        graph,
+        "-map",
+        "[out]",
         outPath,
       ]);
 

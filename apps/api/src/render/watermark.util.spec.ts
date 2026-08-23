@@ -1,4 +1,11 @@
-import { buildDelogoFilter, clampWatermarkRegion, type WatermarkRegion } from "./watermark.util";
+import {
+  buildDelogoFilter,
+  buildWatermarkFilterParts,
+  canvasToOutputScale,
+  clampWatermarkRegion,
+  scaleWatermarkRegion,
+  type WatermarkRegion,
+} from "./watermark.util";
 
 const CANVAS = { width: 1920, height: 1080 };
 
@@ -75,5 +82,118 @@ describe("buildDelogoFilter", () => {
 
   it("produces an empty string when every region is unusable", () => {
     expect(buildDelogoFilter([region({ width: 0, height: 0 })], CANVAS)).toBe("");
+  });
+});
+
+describe("canvasToOutputScale / scaleWatermarkRegion", () => {
+  it("is identity when the export matches the source size (an Original export)", () => {
+    const scale = canvasToOutputScale({ width: 1920, height: 1080 }, { width: 1920, height: 1080 });
+    expect(scale).toEqual({ x: 1, y: 1 });
+    expect(scaleWatermarkRegion(region(), scale)).toEqual(region());
+  });
+
+  it("moves and shrinks a region when exporting smaller than the source", () => {
+    // 1920x1080 source exported at 1280x720: everything is 2/3 size.
+    const scale = canvasToOutputScale({ width: 1920, height: 1080 }, { width: 1280, height: 720 });
+    expect(scaleWatermarkRegion(region({ x: 1500, y: 60, width: 300, height: 150 }), scale)).toMatchObject({
+      x: 1000,
+      y: 40,
+      width: 200,
+      height: 100,
+    });
+  });
+
+  it("grows a region when exporting larger than the source", () => {
+    const scale = canvasToOutputScale({ width: 640, height: 360 }, { width: 1280, height: 720 });
+    expect(scaleWatermarkRegion(region({ x: 100, y: 50, width: 60, height: 30 }), scale)).toMatchObject({
+      x: 200,
+      y: 100,
+      width: 120,
+      height: 60,
+    });
+  });
+
+  it("stays inside the output frame after scaling, so delogo still has pixels to sample", () => {
+    const scale = canvasToOutputScale({ width: 640, height: 360 }, { width: 1280, height: 720 });
+    const scaled = scaleWatermarkRegion(region({ x: 500, y: 300, width: 139, height: 59 }), scale);
+    const clamped = clampWatermarkRegion(scaled, { width: 1280, height: 720 })!;
+    expect(clamped.x + clamped.w).toBeLessThanOrEqual(1279);
+    expect(clamped.y + clamped.h).toBeLessThanOrEqual(719);
+  });
+
+  it("falls back to 1:1 rather than Infinity when the canvas size is unknown", () => {
+    expect(canvasToOutputScale({ width: 0, height: 0 }, { width: 1280, height: 720 })).toEqual({ x: 1, y: 1 });
+  });
+});
+
+describe("buildWatermarkFilterParts", () => {
+  const IN = "base";
+  const OUT = "wmrm";
+
+  it("returns nothing to do when there are no regions", () => {
+    expect(buildWatermarkFilterParts([], CANVAS, IN, OUT)).toEqual([]);
+  });
+
+  it("collapses every reconstruct region into a single in-place chain", () => {
+    const parts = buildWatermarkFilterParts([region({ id: "a" }), region({ id: "b", x: 900 })], CANVAS, IN, OUT);
+    expect(parts).toEqual([`[base]delogo=x=100:y=200:w=300:h=150,delogo=x=900:y=200:w=300:h=150[wmrm]`]);
+  });
+
+  it("cuts out, blurs and pastes back a blur region", () => {
+    // A blur can't filter in place the way delogo does — the area has to be
+    // cropped, treated and overlaid back at the same coordinates.
+    const parts = buildWatermarkFilterParts([region({ mode: "BLUR" })], CANVAS, IN, OUT);
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toContain("split=2");
+    expect(parts[1]).toContain("crop=300:150:100:200");
+    expect(parts[1]).toContain("boxblur=");
+    expect(parts[2]).toContain("overlay=100:200[wmrm]");
+  });
+
+  it("throws detail away for pixelate rather than smoothing it", () => {
+    const parts = buildWatermarkFilterParts([region({ mode: "PIXELATE" })], CANVAS, IN, OUT);
+    expect(parts[1]).toContain("flags=neighbor");
+    expect(parts[1]).toContain("scale=300:150:flags=neighbor");
+  });
+
+  it("threads several cut-out regions through one graph, ending at the output label", () => {
+    const parts = buildWatermarkFilterParts(
+      [region({ id: "a", mode: "BLUR" }), region({ id: "b", x: 900, mode: "PIXELATE" })],
+      CANVAS,
+      IN,
+      OUT,
+    );
+    // Every intermediate label must be produced before it is consumed, or
+    // ffmpeg rejects the whole graph.
+    expect(parts[0]).toContain("[base]");
+    expect(parts[parts.length - 1]).toContain(`[${OUT}]`);
+    const produced = new Set<string>();
+    for (const part of parts) {
+      for (const label of part.matchAll(/\[([a-z0-9_]+)\]/gi)) produced.add(label[1]!);
+    }
+    expect(produced.has(OUT)).toBe(true);
+  });
+
+  it("mixes reconstruct and blur regions without losing either", () => {
+    const parts = buildWatermarkFilterParts(
+      [region({ id: "a" }), region({ id: "b", x: 900, mode: "BLUR" })],
+      CANVAS,
+      IN,
+      OUT,
+    );
+    expect(parts.some((p) => p.includes("delogo="))).toBe(true);
+    expect(parts.some((p) => p.includes("boxblur="))).toBe(true);
+    expect(parts[parts.length - 1]).toContain(`[${OUT}]`);
+  });
+
+  it("keeps the blur radius under half the region, which ffmpeg requires", () => {
+    const parts = buildWatermarkFilterParts([region({ width: 12, height: 10, mode: "BLUR" })], CANVAS, IN, OUT);
+    const radius = Number(/boxblur=(\d+)/.exec(parts[1]!)![1]);
+    expect(radius).toBeGreaterThanOrEqual(2);
+    expect(radius).toBeLessThan(10 / 2);
+  });
+
+  it("drops an unusable region instead of emitting a broken graph", () => {
+    expect(buildWatermarkFilterParts([region({ width: 0, height: 0, mode: "BLUR" })], CANVAS, IN, OUT)).toEqual([]);
   });
 });

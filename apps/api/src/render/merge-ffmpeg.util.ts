@@ -1,4 +1,4 @@
-import { buildDelogoFilter, type WatermarkRegion } from "./watermark.util";
+import { buildWatermarkFilterParts, type WatermarkRegion } from "./watermark.util";
 // Pure helpers for planning a multitrack render — no file I/O or process
 // spawning, so the filter-graph logic can be unit tested without a real
 // ffmpeg binary.
@@ -289,16 +289,16 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   // the region translated out of canvas coordinates for every clip, which
   // is exactly the arithmetic this ordering avoids.
   const lastVideoIndex = orderedVisual.reduce((last, { clip }, i) => (clip.kind === "video" ? i : last), -1);
-  const delogoFilter = buildDelogoFilter(plan.watermarkRemovals ?? [], { width: plan.width, height: plan.height });
-  const applyDelogo = () => {
-    if (!delogoFilter) return;
-    filterParts.push(`[${compositeLabel}]${delogoFilter}[dlg]`);
-    compositeLabel = "dlg";
+  const applyWatermarkRemoval = () => {
+    const parts = buildWatermarkFilterParts(plan.watermarkRemovals ?? [], { width: plan.width, height: plan.height }, compositeLabel, "wmrm");
+    if (parts.length === 0) return;
+    filterParts.push(...parts);
+    compositeLabel = "wmrm";
   };
   // A timeline of nothing but overlays has no video clip to key off, so
   // the removal is applied straight onto the base canvas instead of being
   // silently dropped.
-  if (lastVideoIndex === -1) applyDelogo();
+  if (lastVideoIndex === -1) applyWatermarkRemoval();
 
   orderedVisual.forEach(({ clip }, i) => {
     const nextLabel = `comp${i}`;
@@ -309,7 +309,7 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
         `enable='between(t,${startS},${endS})'[${nextLabel}]`,
     );
     compositeLabel = nextLabel;
-    if (i === lastVideoIndex) applyDelogo();
+    if (i === lastVideoIndex) applyWatermarkRemoval();
   });
   // Captions burn in last, on top of every composited clip and overlay, so
   // a logo can't cover them and they read against the final picture.

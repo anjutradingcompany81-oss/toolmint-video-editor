@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { newWatermarkRegion, type WatermarkRegion } from "@/lib/composition-api";
+import { newWatermarkRegion, type WatermarkMode, type WatermarkRegion } from "@/lib/composition-api";
 import { API_BASE_URL, getAccessToken } from "@/lib/api-client";
 import { TrashIcon, PlusIcon } from "@/components/icons";
 import { formatTimecode } from "./format";
@@ -46,11 +46,13 @@ export default function WatermarkPanel({
   }, [previewUrl]);
 
   function addRegion() {
-    // A box in the top-right corner at a size that suits most channel
-    // logos - a sensible thing to drag from rather than a zero-size box
-    // the user has to find before they can grab it.
-    const width = Math.round(canvasWidth * 0.18);
-    const height = Math.round(canvasHeight * 0.14);
+    // Sized for a typical corner bug, and deliberately on the small side:
+    // reconstruction quality falls off fast with area, so a box that
+    // starts too big produces an ugly smear before the user has touched
+    // anything. Easier to enlarge a small box than to discover why a big
+    // one looked bad.
+    const width = Math.round(canvasWidth * 0.11);
+    const height = Math.round(canvasHeight * 0.08);
     const region = newWatermarkRegion(canvasWidth - width - Math.round(canvasWidth * 0.03), Math.round(canvasHeight * 0.04), width, height);
     onChange([...regions, region]);
     onSelect(region.id);
@@ -125,8 +127,11 @@ export default function WatermarkPanel({
               who expects a flawless erase on detailed footage would
               reasonably feel misled. */}
           <p className="rounded-md border border-line bg-panel/60 px-2.5 py-2 text-[11px] leading-snug text-ink-muted">
-            The covered area is rebuilt from the pixels around it. That works well over flat or gently changing backgrounds — sky, walls, blurred
-            scenery — and leaves a soft smudge over busy detail or hard edges. Keep the box tight to the mark for the best result.
+            <strong className="text-ink">Rebuild</strong> genuinely removes the mark, reconstructing the area from the pixels around it. It is
+            invisible over flat backgrounds like sky or walls, and streaks over grass, foliage or text.{" "}
+            <strong className="text-ink">Blur</strong> and <strong className="text-ink">Pixelate</strong> instead obscure the area — the mark stops
+            being readable and the result looks deliberate rather than damaged, which usually beats a streak on busy footage. One catch: a solid,
+            opaque logo stays visible as a pale patch under Blur, so use Rebuild for those. Keep the box tight to the mark either way.
           </p>
 
           {error && <p className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
@@ -168,6 +173,31 @@ export default function WatermarkPanel({
                     {/* Numeric entry as well as dragging: matching a mark
                         that sits at known coordinates across several
                         projects is much easier typed than dragged. */}
+                    <div className="flex gap-1">
+                      {(
+                        [
+                          ["RECONSTRUCT", "Rebuild"],
+                          ["BLUR", "Blur"],
+                          ["PIXELATE", "Pixelate"],
+                        ] as [WatermarkMode, string][]
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateRegion(region.id, { mode: value });
+                          }}
+                          className={`flex-1 rounded border px-1.5 py-1 text-[10px] ${
+                            (region.mode ?? "RECONSTRUCT") === value
+                              ? "border-brand bg-brand/15 text-brand"
+                              : "border-line text-ink-muted hover:border-brand/50"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
                     <div className="grid grid-cols-4 gap-1.5">
                       {(["x", "y", "width", "height"] as const).map((field) => (
                         <label key={field} className="flex flex-col gap-0.5 text-[10px] uppercase text-ink-muted">
