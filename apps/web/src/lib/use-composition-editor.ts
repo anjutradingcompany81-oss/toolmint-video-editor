@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "./api-client";
 import { getProject, type Project } from "./projects-api";
 import {
@@ -19,8 +19,19 @@ import {
   type Timeline,
   type Track,
 } from "./composition-api";
+import { createFlushableDebouncer } from "./flushable-debounce";
 
 export type SaveStatus = "unsaved" | "saving" | "saved" | "error";
+
+interface SaveArgs {
+  nextClips: MediaClip[];
+  nextOverlayClips: MediaClip[];
+  extraTracks: Track[];
+  captions?: { subtitles: SubtitleCue[]; subtitleStyle: SubtitleStyle };
+  nextVoiceOverClips?: MediaClip[];
+  nextWatermarkRemovals?: WatermarkRegion[];
+  nextAudioClips?: MediaClip[];
+}
 
 const SAVE_DEBOUNCE_MS = 1500;
 // These names identify the two managed audio tracks. They are matched on
@@ -88,7 +99,6 @@ export function useCompositionEditor(projectId: string) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clipsRef = useRef(clips);
   const overlayClipsRef = useRef(overlayClips);
   const timelineRef = useRef(timeline);
@@ -209,11 +219,75 @@ export function useCompositionEditor(projectId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  // The actual network save. Wrapped in a FlushableDebouncer (below) so
+  // there is exactly one place that builds the payload and interprets the
+  // result, for both the normal debounced path and an on-demand flush.
+  // Returns whether it succeeded — callers that must not proceed on stale
+  // data (export, above all) can check this directly instead of firing a
+  // save and hoping it lands in time.
+  const runSave = useCallback(
+    async (args: SaveArgs): Promise<boolean> => {
+      const { nextClips, nextOverlayClips, extraTracks, captions, nextVoiceOverClips, nextWatermarkRemovals, nextAudioClips } = args;
+      const current = timelineRef.current;
+      const currentTrackId = trackIdRef.current;
+      if (!current || !currentTrackId) return false;
+      setSaveStatus("saving");
+      setSaveError(null);
+      try {
+        // Merge both managed tracks back into the full clip list — clips
+        // on any track this editor doesn't manage are carried through
+        // unchanged.
+        const managedTrackIds = new Set(
+          [currentTrackId, overlayTrackIdRef.current, voiceOverTrackIdRef.current, audioTrackIdRef.current].filter(Boolean) as string[],
+        );
+        const otherClips = current.clips.filter((c) => !managedTrackIds.has(c.trackId));
+        // Carried through on every save, exactly like captions, so an
+        // unrelated clip edit can't drop the narration off the timeline.
+        const voiceOver = nextVoiceOverClips ?? voiceOverClipsRef.current;
+        const audio = nextAudioClips ?? audioClipsRef.current;
+        const tracks = [...current.tracks, ...extraTracks.filter((t) => !current.tracks.some((existing) => existing.id === t.id))];
+        const payload: Timeline = {
+          ...current,
+          tracks,
+          clips: [...otherClips, ...nextClips, ...nextOverlayClips, ...voiceOver, ...audio],
+          // Captions are only overwritten by an edit that actually
+          // changed them; every other save carries the current ones
+          // through so a clip edit can't wipe the script.
+          watermarkRemovals: nextWatermarkRemovals ?? watermarkRemovalsRef.current,
+          subtitles: captions?.subtitles ?? subtitlesRef.current,
+          subtitleStyle: captions?.subtitleStyle ?? subtitleStyleRef.current,
+          updatedAt: new Date().toISOString(),
+        };
+        const env = await saveComposition(projectId, payload);
+        setTimeline(env.composition);
+        setSaveStatus("saved");
+        return true;
+      } catch (err) {
+        setSaveStatus("error");
+        setSaveError(err instanceof ApiError ? err.message : "Couldn't save changes.");
+        return false;
+      }
+    },
+    [projectId],
+  );
+
+  // Built in an effect, not during render, and only accessed from event
+  // handlers below (scheduleSave/flushSave) — never read while rendering.
+  // runSave only changes identity if projectId changes, which in practice
+  // means this whole page has been remounted for a different project — so
+  // rebuilding the debouncer alongside it (rather than keeping one for the
+  // hook's entire lifetime) is correct, not just convenient: a save left
+  // pending for the *previous* project has nothing to flush into once
+  // projectId has moved on.
+  const debouncerRef = useRef<ReturnType<typeof createFlushableDebouncer<SaveArgs>> | null>(null);
   useEffect(() => {
+    const created = createFlushableDebouncer<SaveArgs>(runSave, SAVE_DEBOUNCE_MS);
+    debouncerRef.current = created;
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      created.cancel();
+      debouncerRef.current = null;
     };
-  }, []);
+  }, [runSave]);
 
   // `extraTracks` lets a caller add a track (currently the lazily-created
   // overlay track) in the same save that first uses it, so the clip and the
@@ -230,49 +304,18 @@ export function useCompositionEditor(projectId: string) {
       nextAudioClips?: MediaClip[],
     ) => {
       setSaveStatus("unsaved");
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        const current = timelineRef.current;
-        const currentTrackId = trackIdRef.current;
-        if (!current || !currentTrackId) return;
-        setSaveStatus("saving");
-        setSaveError(null);
-        try {
-          // Merge both managed tracks back into the full clip list — clips
-          // on any track this editor doesn't manage are carried through
-          // unchanged.
-          const managedTrackIds = new Set(
-            [currentTrackId, overlayTrackIdRef.current, voiceOverTrackIdRef.current, audioTrackIdRef.current].filter(Boolean) as string[],
-          );
-          const otherClips = current.clips.filter((c) => !managedTrackIds.has(c.trackId));
-          // Carried through on every save, exactly like captions, so an
-          // unrelated clip edit can't drop the narration off the timeline.
-          const voiceOver = nextVoiceOverClips ?? voiceOverClipsRef.current;
-          const audio = nextAudioClips ?? audioClipsRef.current;
-          const tracks = [...current.tracks, ...extraTracks.filter((t) => !current.tracks.some((existing) => existing.id === t.id))];
-          const payload: Timeline = {
-            ...current,
-            tracks,
-            clips: [...otherClips, ...nextClips, ...nextOverlayClips, ...voiceOver, ...audio],
-            // Captions are only overwritten by an edit that actually
-            // changed them; every other save carries the current ones
-            // through so a clip edit can't wipe the script.
-            watermarkRemovals: nextWatermarkRemovals ?? watermarkRemovalsRef.current,
-            subtitles: captions?.subtitles ?? subtitlesRef.current,
-            subtitleStyle: captions?.subtitleStyle ?? subtitleStyleRef.current,
-            updatedAt: new Date().toISOString(),
-          };
-          const env = await saveComposition(projectId, payload);
-          setTimeline(env.composition);
-          setSaveStatus("saved");
-        } catch (err) {
-          setSaveStatus("error");
-          setSaveError(err instanceof ApiError ? err.message : "Couldn't save changes.");
-        }
-      }, SAVE_DEBOUNCE_MS);
+      debouncerRef.current?.schedule({ nextClips, nextOverlayClips, extraTracks, captions, nextVoiceOverClips, nextWatermarkRemovals, nextAudioClips });
     },
-    [projectId],
+    [],
   );
+
+  // Guarantees the latest edit has actually reached the server before the
+  // caller proceeds — export is the reason this exists: exporting while an
+  // edit is still sitting in the debounce window (or mid-flight) silently
+  // rendered whatever was saved *before* that edit, which read as "I edited
+  // the video and exported it, but nothing changed." Skips the debounce
+  // delay entirely and runs (or joins) the real save immediately.
+  const flushSave = useCallback((): Promise<boolean> => debouncerRef.current?.flush() ?? Promise.resolve(true), []);
 
   function pushHistory() {
     const now = Date.now();
@@ -491,6 +534,7 @@ export function useCompositionEditor(projectId: string) {
     loadError,
     saveStatus,
     saveError,
+    flushSave,
     withClips,
     undo,
     redo,

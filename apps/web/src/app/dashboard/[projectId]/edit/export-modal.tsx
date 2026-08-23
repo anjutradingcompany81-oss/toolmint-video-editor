@@ -20,6 +20,12 @@ interface ExportModalProps {
   projectTitle: string;
   open: boolean;
   onClose: () => void;
+  // Flushes any edit still sitting in the autosave debounce (or already
+  // mid-flight) and resolves once it's actually landed on the server —
+  // without this, starting an export right after an edit could render
+  // whatever was saved *before* that edit, which reads as "I edited the
+  // video and exported it, but nothing changed."
+  ensureSaved: () => Promise<boolean>;
 }
 
 const POLL_MS = 1200;
@@ -33,12 +39,13 @@ const STAGE_LABEL: Record<ExportJob["status"], string> = {
   CANCELLED: "Cancelled",
 };
 
-export default function ExportModal({ projectId, projectTitle, open, onClose }: ExportModalProps) {
+export default function ExportModal({ projectId, projectTitle, open, onClose, ensureSaved }: ExportModalProps) {
   const [resolution, setResolution] = useState<ExportResolution>("R1080P");
   const [quality, setQuality] = useState<ExportQuality>("STANDARD");
   const [fileName, setFileName] = useState(projectTitle);
   const [job, setJob] = useState<ExportJob | null>(null);
   const [starting, setStarting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -77,8 +84,16 @@ export default function ExportModal({ projectId, projectTitle, open, onClose }: 
   }
 
   async function handleStart() {
-    setStarting(true);
     setError(null);
+    setSaving(true);
+    const saved = await ensureSaved();
+    setSaving(false);
+    if (!saved) {
+      setError("Your latest edits couldn't be saved, so exporting now would produce a video without them. Fix the save error above and try again.");
+      return;
+    }
+
+    setStarting(true);
     try {
       const created = await createExport(projectId, { resolution, quality, outputFileName: fileName.trim() || undefined });
       setJob(created);
@@ -174,10 +189,10 @@ export default function ExportModal({ projectId, projectTitle, open, onClose }: 
               </button>
               <button
                 onClick={handleStart}
-                disabled={starting}
+                disabled={saving || starting}
                 className="rounded-md bg-brand px-4 py-1.5 text-sm font-medium text-ink hover:bg-brand/90 disabled:opacity-50"
               >
-                {starting ? "Starting…" : "Start export"}
+                {saving ? "Saving your edits…" : starting ? "Starting…" : "Start export"}
               </button>
             </div>
           </>

@@ -80,6 +80,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     loadError,
     saveStatus,
     saveError,
+    flushSave,
     withClips,
     undo,
     redo,
@@ -805,7 +806,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         />
       </div>
 
-      <ExportModal projectId={projectId} projectTitle={project.title} open={exportOpen} onClose={() => setExportOpen(false)} />
+      <ExportModal projectId={projectId} projectTitle={project.title} open={exportOpen} onClose={() => setExportOpen(false)} ensureSaved={flushSave} />
     </div>
   );
 }
