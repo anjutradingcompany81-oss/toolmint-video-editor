@@ -411,22 +411,27 @@ export default function TimelinePanel({
           <CopyIcon width={12} height={12} /> Duplicate
         </button>
 
+        {/* Deleting closes the gap by default. Leaving a hole behind and
+            making the user press a second, differently-named button to
+            tidy it up is not what "delete this clip" means to anyone; the
+            leave-a-gap variant is still here for when it's wanted, just no
+            longer the thing you get by accident. */}
         <button
-          onClick={onDeleteSelected}
+          onClick={onRippleDeleteSelected}
           disabled={!selectedClipId}
-          title="Delete selected clip, leaving a gap (Delete)"
+          title="Delete selected clip and close the gap (Delete)"
           className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-danger hover:border-danger disabled:opacity-30 disabled:text-ink-muted"
         >
           <TrashIcon width={12} height={12} /> Delete clip
         </button>
 
         <button
-          onClick={onRippleDeleteSelected}
+          onClick={onDeleteSelected}
           disabled={!selectedClipId}
-          title="Delete selected clip and close the gap (Shift+Delete)"
-          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-danger hover:border-danger disabled:opacity-30 disabled:text-ink-muted"
+          title="Delete selected clip but leave the gap where it was (Shift+Delete)"
+          className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger disabled:opacity-30"
         >
-          <RippleDeleteIcon /> Ripple Delete
+          <RippleDeleteIcon /> Delete, keep gap
         </button>
 
         {hasMarkedRange && (

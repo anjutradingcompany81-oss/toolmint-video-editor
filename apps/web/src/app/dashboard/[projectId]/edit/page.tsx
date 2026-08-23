@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useCompositionEditor } from "@/lib/use-composition-editor";
 import { useTimelinePlayer, type ClipLayoutEntry } from "@/lib/use-timeline-player";
+import { useAudioPlayback } from "@/lib/use-audio-playback";
 import { listMedia, type MediaAsset } from "@/lib/projects-api";
 import {
   newVideoClip,
@@ -178,6 +179,18 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const canvasHeight = layout[0]?.asset?.height ?? 1080;
 
   const player = useTimelinePlayer(layout, totalDurationMs);
+
+  // Uploaded audio and the generated voice over now play with the preview.
+  // The <video> element only carries its own clip's sound, so anything on
+  // an audio track used to be silent until export - leaving no way to
+  // judge timing against the picture while editing.
+  useAudioPlayback({
+    clips: [...audioClips, ...voiceOverClips],
+    assetById: mediaById,
+    playheadMs: player.playheadMs,
+    playing: player.playing,
+    playbackRate: player.playbackRate,
+  });
   const activeEntry = useMemo(() => {
     for (const entry of layout) {
       if (player.playheadMs < entry.startMs + entry.durationMs - 1 || entry === layout[layout.length - 1]) return entry;
@@ -277,7 +290,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     (clipId: string) => {
       withClips((prev) => prev.filter((c) => c.id !== clipId));
       setSelectedClipId((current) => (current === clipId ? null : current));
-      setMessage({ text: "Clip deleted. The gap is left in place — use Ripple Delete to close it.", tone: "success" });
+      setMessage({ text: "Clip deleted, gap left in place.", tone: "success" });
     },
     [withClips],
   );
@@ -286,7 +299,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     (clipId: string) => {
       withClips((prev) => rippleDeleteClip(prev, clipId));
       setSelectedClipId((current) => (current === clipId ? null : current));
-      setMessage({ text: "Clip removed and the gap closed.", tone: "success" });
+      setMessage({ text: "Clip deleted and the timeline closed up.", tone: "success" });
     },
     [withClips],
   );
@@ -448,17 +461,19 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     setMessage({ text: "Selected portion removed successfully. The original video remains unchanged.", tone: "success" });
   }, [markInMs, markOutMs, clips, trackId, sourceDurationOfClip, withClips, clearMarks, player]);
 
-  // Delete / Backspace leaves the gap; Shift+Delete ripples it closed.
+  // Delete / Backspace closes the gap; Shift+Delete keeps it. This way
+  // round because closing up is what "delete" is expected to do, and the
+  // gap-preserving variant is the deliberate, rarer choice.
   // These are now genuinely different operations — before positions were
   // preserved, both did the same thing because every edit was repacked.
   // A marked range still takes priority over a selected clip.
   const handleDeleteKey = useCallback(
-    (ripple: boolean) => {
+    (keepGap: boolean) => {
       if (hasMarkedRange) {
         cutSelection();
       } else if (selectedClipId) {
-        if (ripple) rippleDelete(selectedClipId);
-        else deleteClip(selectedClipId);
+        if (keepGap) deleteClip(selectedClipId);
+        else rippleDelete(selectedClipId);
       } else {
         setMessage({ text: "Select a clip, or mark a start and end point, before deleting.", tone: "error" });
       }
