@@ -1,5 +1,6 @@
 import { buildWatermarkFilterParts, type WatermarkRegion } from "./watermark.util";
 import { buildAudioFadeFilters, buildVideoFadeFilters } from "./fade.util";
+import { planTransitions } from "./transition.util";
 // Pure helpers for planning a multitrack render — no file I/O or process
 // spawning, so the filter-graph logic can be unit tested without a real
 // ffmpeg binary.
@@ -66,6 +67,11 @@ export interface Transform {
 }
 
 export interface VisualClipSegment {
+  /** Identity, needed to match a clip against its neighbour for transitions. */
+  id: string;
+  trackId: string;
+  /** Crossfade length with the clip immediately before this one. */
+  transitionInMs?: number;
   /** Fade lengths in ms, measured inward from each end of the clip. */
   fadeInMs?: number;
   fadeOutMs?: number;
@@ -103,6 +109,9 @@ export interface AudioPatchSegment {
 }
 
 export interface AudioClipSegment {
+  id: string;
+  trackId: string;
+  transitionInMs?: number;
   fadeInMs?: number;
   fadeOutMs?: number;
   localPath: string;
@@ -258,9 +267,15 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
 
   // Sort a *copy* — compositing order must follow track order, but callers
   // may hand clips in whatever order they were queried in.
+  // Position is part of the sort, not just track order. Two clips on one
+  // track never overlapped before, so their relative order was arbitrary
+  // and harmless — a crossfade makes them overlap on purpose, and the
+  // later clip has to composite ON TOP or the dissolve runs backwards.
   const orderedVisual = plan.visualClips
     .map((clip, i) => ({ clip, inputIndex: visualInputIndex[i] }))
-    .sort((a, b) => a.clip.trackOrder - b.clip.trackOrder);
+    .sort((a, b) => a.clip.trackOrder - b.clip.trackOrder || a.clip.startMs - b.clip.startMs);
+
+  const visualTransitions = planTransitions(plan.visualClips);
 
   orderedVisual.forEach(({ clip, inputIndex }, i) => {
     const durationS = sec(clip.durationMs);
@@ -285,12 +300,31 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
     // An overlay fades its alpha instead of towards black: it sits on top
     // of other picture, and fading to black would punch a hole through to
     // nothing rather than revealing what is underneath.
+    const transition = visualTransitions.get(clip.id) ?? { dissolveInMs: 0, tailExtensionMs: 0 };
+    // A clip that something dissolves INTO has to keep playing underneath
+    // its successor for the length of the transition, so it is rendered
+    // longer than it occupies on the timeline. tpad clones the last frame
+    // as a fallback for a clip that has no source left to play.
+    const renderDurationMs = clip.durationMs + transition.tailExtensionMs;
+    const tailPad = transition.tailExtensionMs > 0 ? `,tpad=stop_mode=clone:stop_duration=${sec(transition.tailExtensionMs)}` : "";
+
+    // Only the INCOMING clip fades, and it fades its alpha. It is drawn on
+    // top, so ramping its transparency up reveals the outgoing clip
+    // underneath — that is the dissolve. Fading the outgoing one as well
+    // would leave both semi-transparent over the black base and dip the
+    // whole picture dark through the middle of the transition.
+    const dissolving = transition.dissolveInMs > 0;
     const fadeFilters = buildVideoFadeFilters(
-      { fadeInMs: clip.fadeInMs ?? 0, fadeOutMs: clip.fadeOutMs ?? 0, durationMs: clip.durationMs },
-      clip.kind === "overlay",
+      {
+        fadeInMs: dissolving ? transition.dissolveInMs : (clip.fadeInMs ?? 0),
+        // A clip being dissolved out of does not also fade to black.
+        fadeOutMs: transition.tailExtensionMs > 0 ? 0 : (clip.fadeOutMs ?? 0),
+        durationMs: renderDurationMs,
+      },
+      clip.kind === "overlay" || dissolving,
     );
     filterParts.push(
-      `[${inputIndex}:v]trim=start=${sec(clip.trimInMs)}:duration=${durationS},setpts=PTS-STARTPTS,` +
+      `[${inputIndex}:v]trim=start=${sec(clip.trimInMs)}:duration=${sec(renderDurationMs)},setpts=PTS-STARTPTS${tailPad},` +
         `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,format=yuva420p,` +
         (fadeFilters ? `${fadeFilters},` : "") +
         `colorchannelmixer=aa=${clip.transform.opacity.toFixed(3)},setpts=PTS+${startS}/TB[${label}]`,
@@ -323,7 +357,7 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   orderedVisual.forEach(({ clip }, i) => {
     const nextLabel = `comp${i}`;
     const startS = sec(clip.startMs);
-    const endS = sec(clip.startMs + clip.durationMs);
+    const endS = sec(clip.startMs + clip.durationMs + (visualTransitions.get(clip.id)?.tailExtensionMs ?? 0));
     filterParts.push(
       `[${compositeLabel}][v${i}]overlay=x=${Math.round(clip.transform.x)}:y=${Math.round(clip.transform.y)}:` +
         `enable='between(t,${startS},${endS})'[${nextLabel}]`,
@@ -341,20 +375,33 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   // Audio: base silence plus every audio-bearing clip (or a synthetic
   // silent segment for a clip whose source has no audio track), each
   // delayed to its own absolute start time, then mixed together.
+  const audioTransitions = planTransitions(plan.audioClips);
   const audioLabels = [`${BASE_AUDIO_INPUT}:a`];
   plan.audioClips.forEach((clip, i) => {
     const inputIndex = audioInputIndex[i];
     const delayMs = Math.max(0, Math.round(clip.startMs));
     const label = `a${i}`;
     if (clip.hasAudio) {
-      const { filterLines, outputLabel } = buildClipAudioFilterChain(clip, inputIndex, `a${i}_`);
+      const audioTransition = audioTransitions.get(clip.id) ?? { dissolveInMs: 0, tailExtensionMs: 0 };
+      const audioRenderMs = clip.durationMs + audioTransition.tailExtensionMs;
+      // The chain has to pull the extra audio too, or there would be
+      // nothing there to fade out under the incoming clip.
+      const { filterLines, outputLabel } = buildClipAudioFilterChain(
+        { ...clip, durationMs: audioRenderMs },
+        inputIndex,
+        `a${i}_`,
+      );
       filterParts.push(...filterLines);
       // Same clip-local reasoning as the picture: the delay to the clip's
       // timeline position is applied after the fade, not before.
+      // Sound crossfades differently from picture: the mix SUMS its
+      // inputs, so the outgoing clip has to fade down as the incoming one
+      // fades up or the overlap is simply twice as loud. (The picture
+      // needs the opposite — see the visual chain above.)
       const audioFades = buildAudioFadeFilters({
-        fadeInMs: clip.fadeInMs ?? 0,
-        fadeOutMs: clip.fadeOutMs ?? 0,
-        durationMs: clip.durationMs,
+        fadeInMs: audioTransition.dissolveInMs > 0 ? audioTransition.dissolveInMs : (clip.fadeInMs ?? 0),
+        fadeOutMs: audioTransition.tailExtensionMs > 0 ? audioTransition.tailExtensionMs : (clip.fadeOutMs ?? 0),
+        durationMs: audioRenderMs,
       });
       filterParts.push(
         `[${outputLabel}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume=${clip.volume.toFixed(3)},` +

@@ -101,6 +101,10 @@ function mediaClipShape<K extends "video" | "audio" | "overlay">(kind: K) {
     // Defaulted, so clips saved before fades existed still parse. Whether
     // the two fades can overlap is checked below, where the clip's own
     // duration is in scope.
+    // Crossfade with the clip immediately before this one on the same
+    // track. Ignored when there is nothing adjacent to dissolve from -
+    // see render/transition.util.ts.
+    transitionInMs: z.number().int().nonnegative().default(0),
     fadeInMs: z.number().int().nonnegative().default(0),
     fadeOutMs: z.number().int().nonnegative().default(0),
     transform: transformSchema,

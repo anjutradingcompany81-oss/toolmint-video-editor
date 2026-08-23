@@ -9,6 +9,10 @@ import {
 
 function buildVisual(overrides: Partial<VisualClipSegment> = {}): VisualClipSegment {
   return {
+    // Unique per call so transition planning, which matches clips by id,
+    // never sees two fixtures as the same clip.
+    id: overrides.id ?? `v_${Math.random().toString(36).slice(2, 8)}`,
+    trackId: "track_1",
     localPath: "/tmp/clip.mp4",
     kind: "video",
     trackOrder: 0,
@@ -24,6 +28,8 @@ function buildVisual(overrides: Partial<VisualClipSegment> = {}): VisualClipSegm
 
 function buildAudio(overrides: Partial<AudioClipSegment> = {}): AudioClipSegment {
   return {
+    id: overrides.id ?? `a_${Math.random().toString(36).slice(2, 8)}`,
+    trackId: "track_1",
     localPath: "/tmp/audio.mp4",
     startMs: 0,
     durationMs: 5000,

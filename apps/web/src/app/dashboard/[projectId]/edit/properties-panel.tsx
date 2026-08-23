@@ -10,6 +10,9 @@ interface PropertiesPanelProps {
   onSetTrim: (trimInMs: number, trimOutMs: number) => void;
   onSetVolume: (volume: number) => void;
   onSetFades: (fadeInMs: number, fadeOutMs: number) => void;
+  onSetTransition: (transitionInMs: number) => void;
+  /** True when a clip ends exactly where this one starts, so a dissolve has something to come from. */
+  hasPreviousNeighbour: boolean;
   onSetMuted: (muted: boolean) => void;
   onReset: () => void;
   onDelete: () => void;
@@ -24,6 +27,8 @@ export default function PropertiesPanel({
   onSetTrim,
   onSetVolume,
   onSetFades,
+  onSetTransition,
+  hasPreviousNeighbour,
   onSetMuted,
   onReset,
   onDelete,
@@ -134,6 +139,40 @@ export default function PropertiesPanel({
           black while its audio carries on at full level sounds like a
           mistake, and wanting one without the other is rare enough not to
           justify two more controls. */}
+      <div className="flex flex-col gap-2 border-t border-line pt-3">
+        <p className="text-xs uppercase tracking-wide text-ink-muted">Transition</p>
+        {hasPreviousNeighbour ? (
+          <>
+            <label className="flex items-center justify-between text-xs text-ink-muted">
+              Crossfade from previous clip
+              <span className="tabular-nums text-ink">
+                {(clip.transitionInMs ?? 0) === 0 ? "None" : `${((clip.transitionInMs ?? 0) / 1000).toFixed(2)}s`}
+              </span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, Math.floor(clip.durationMs / 2))}
+              step={50}
+              value={Math.min(clip.transitionInMs ?? 0, Math.floor(clip.durationMs / 2))}
+              onChange={(e) => onSetTransition(Number(e.target.value))}
+              className="w-full accent-brand"
+            />
+            {(clip.transitionInMs ?? 0) > 0 && (
+              <p className="text-[11px] leading-snug text-ink-muted">
+                The previous clip stays on screen underneath while this one fades up, so the two mix. It replaces this clip&apos;s fade in.
+              </p>
+            )}
+          </>
+        ) : (
+          // Said rather than silently disabled: "why is this greyed out" is
+          // a worse experience than one line explaining the requirement.
+          <p className="text-[11px] leading-snug text-ink-muted">
+            Needs a clip ending exactly where this one starts. Use Fade in below to come from black instead.
+          </p>
+        )}
+      </div>
+
       <div className="flex flex-col gap-2 border-t border-line pt-3">
         <p className="text-xs uppercase tracking-wide text-ink-muted">Fade</p>
         {/* Capped at half the clip each, so the two can never overlap and

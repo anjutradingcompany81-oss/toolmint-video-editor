@@ -57,6 +57,8 @@ export interface MediaClip extends BaseClip {
   volume: number;
   muted: boolean;
   speedPercent: number;
+  /** Crossfade length with the clip immediately before this one. */
+  transitionInMs: number;
   /** Fade lengths in ms, measured in from each end of the clip. */
   fadeInMs: number;
   fadeOutMs: number;
@@ -177,6 +179,7 @@ export function newVideoClip(trackId: string, mediaAssetId: string, startMs: num
     volume: 1,
     muted: false,
     speedPercent: 100,
+    transitionInMs: 0,
     fadeInMs: 0,
     fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM },
@@ -487,6 +490,7 @@ export function newAudioClip(trackId: string, mediaAssetId: string, startMs: num
     volume: 1,
     muted: false,
     speedPercent: 100,
+    transitionInMs: 0,
     fadeInMs: 0,
     fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM },
@@ -616,6 +620,7 @@ export function newLogoClip(
     volume: 0,
     muted: true,
     speedPercent: 100,
+    transitionInMs: 0,
     fadeInMs: 0,
     fadeOutMs: 0,
     transform: { ...DEFAULT_TRANSFORM, ...transform },
