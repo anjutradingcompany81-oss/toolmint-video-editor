@@ -373,10 +373,12 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
 
   const hasMarkedRange = markInMs !== null && markOutMs !== null && markOutMs > markInMs;
 
-  // The only delete this data model can represent: clips are always
-  // concatenated back-to-back with no absolute positions, so removing a
-  // range (or a whole clip) is inherently a ripple delete — there's no
-  // gap to leave behind, and so no separate "standard delete" mode exists.
+  // Cutting a marked range closes only that range: the two halves either
+  // side join, and every later clip slides back by exactly the cut length.
+  // Gaps elsewhere on the track are deliberate (Delete clip leaves one, a
+  // clip can be dragged anywhere) and survive untouched — this used to
+  // repack the whole track, which silently dragged footage the user had
+  // not touched.
   const cutSelection = useCallback(() => {
     if (markInMs === null || markOutMs === null || markOutMs <= markInMs || !trackId) {
       setMessage({ text: "Select the beginning and end of the unwanted section.", tone: "error" });

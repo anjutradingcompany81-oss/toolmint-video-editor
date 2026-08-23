@@ -654,6 +654,20 @@ export function removeRangeOnTrack(
     return { ok: false, message: "Select a valid start and end point before cutting." };
   }
 
+  // Cutting [startMs, endMs) collapses that span out of the track, so every
+  // position after it moves earlier by exactly the cut length - and nothing
+  // else moves at all.
+  //
+  // This used to finish with repackTrack(), which slams the WHOLE track
+  // back-to-back. Any deliberate gap elsewhere was destroyed by an
+  // unrelated cut: with clips at 0-10s and 15-25s, cutting 2s out of the
+  // first clip moved the second from 15s to 8s instead of 13s, dragging
+  // footage the user never touched. Gaps are legitimate (they render as
+  // black, and Delete clip creates one on purpose), so only the cut's own
+  // span may close.
+  const shift = endMs - startMs;
+  const mapTime = (t: number): number => (t <= startMs ? t : t >= endMs ? t - shift : startMs);
+
   let touchedAnything = false;
   const next: Clip[] = [];
 
@@ -669,7 +683,8 @@ export function removeRangeOnTrack(
     const overlapEnd = Math.min(clipEnd, endMs);
 
     if (overlapStart >= overlapEnd) {
-      next.push(clip);
+      // Untouched by the cut, but everything after it still slides back.
+      next.push(clip.startMs === mapTime(clip.startMs) ? clip : { ...clip, startMs: mapTime(clip.startMs) });
       continue;
     }
     touchedAnything = true;
@@ -680,10 +695,24 @@ export function removeRangeOnTrack(
     const srcOverlapStart = srcIn + (overlapStart - clipStart);
     const srcOverlapEnd = srcIn + (overlapEnd - clipStart);
 
-    const leftDurationMs = srcOverlapStart - srcIn;
-    const rightDurationMs = srcOut - srcOverlapEnd;
-    const keepsLeft = leftDurationMs >= MIN_CLIP_DURATION_MS;
-    const keepsRight = rightDurationMs >= MIN_CLIP_DURATION_MS;
+    // Measured on the TIMELINE, not from the source file. Deriving the
+    // tail's length as (srcOut - srcOverlapEnd) assumes the clip spans its
+    // whole source, and hands back everything trimmed off the end when it
+    // doesn't - a 4s clip cut at 1-2s produced a 12.5s tail that ran over
+    // the next clip, which the schema rejects as overlapping. That failure
+    // was previously hidden by the whole-track repack (which forced the
+    // clips apart while leaving the length wrong) and surfaced as a
+    // permanent "Couldn't save" once the repack was removed.
+    const leftDurationMs = overlapStart - clipStart;
+    const rightDurationMs = clipEnd - overlapEnd;
+    // A piece only survives if the clip actually extends beyond the cut on
+    // that side. Judging by source duration alone would resurrect trimmed-
+    // off material for a clip lying entirely inside the removed span, and
+    // place it at the same spot as the neighbouring clip's tail — an
+    // overlap the timeline schema rejects, which used to be hidden by the
+    // whole-track repack and would now surface as "Couldn't save".
+    const keepsLeft = clipStart < startMs && leftDurationMs >= MIN_CLIP_DURATION_MS;
+    const keepsRight = clipEnd > endMs && rightDurationMs >= MIN_CLIP_DURATION_MS;
 
     const localCutStart = overlapStart - clipStart;
     const localCutEnd = overlapEnd - clipStart;
@@ -700,7 +729,8 @@ export function removeRangeOnTrack(
       next.push({
         ...clip,
         id: randomId("clip"),
-        startMs: clip.startMs + localCutEnd,
+        // The tail slides up to meet the head across the removed span.
+        startMs: mapTime(overlapEnd),
         durationMs: rightDurationMs,
         trimInMs: srcOverlapEnd,
         audioPatches: remapAudioPatches(clip.audioPatches, localCutEnd, clip.durationMs),
@@ -715,7 +745,7 @@ export function removeRangeOnTrack(
     } else if (keepsRight) {
       next.push({
         ...clip,
-        startMs: clip.startMs + localCutEnd,
+        startMs: mapTime(overlapEnd),
         durationMs: rightDurationMs,
         trimInMs: srcOverlapEnd,
         audioPatches: remapAudioPatches(clip.audioPatches, localCutEnd, clip.durationMs),
@@ -728,5 +758,5 @@ export function removeRangeOnTrack(
     return { ok: false, message: "The selected range doesn't overlap any clip on the timeline." };
   }
 
-  return { ok: true, clips: repackTrack(next, trackId) };
+  return { ok: true, clips: next.sort((a, b) => a.startMs - b.startMs) };
 }

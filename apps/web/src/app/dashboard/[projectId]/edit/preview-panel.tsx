@@ -60,8 +60,22 @@ export default function PreviewPanel({
   overlay,
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { videoRef, playheadMs, playing, buffering, playbackRate, setPlaybackRate, stop, togglePlay, seekTo, stepFrame, handleTimeUpdate, handleEnded } =
-    player;
+  const {
+    videoRef,
+    playheadMs,
+    playing,
+    buffering,
+    inGap,
+    mediaError,
+    playbackRate,
+    setPlaybackRate,
+    stop,
+    togglePlay,
+    seekTo,
+    stepFrame,
+    handleTimeUpdate,
+    handleEnded,
+  } = player;
 
   function handleScrub(e: React.ChangeEvent<HTMLInputElement>) {
     seekTo(Number(e.target.value));
@@ -85,7 +99,21 @@ export default function PreviewPanel({
           onTimeUpdate={handleTimeUpdate}
           onEnded={handleEnded}
         />
+        {/* A gap between clips renders as black in the export, so the
+            preview shows black too instead of leaving the previous clip's
+            last frame frozen on screen — which read as "the cut produced
+            the wrong scene". */}
+        {hasClips && inGap && (
+          <div className="absolute inset-0 flex items-end justify-center bg-black pb-3">
+            <span className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-ink-muted">Gap — no clip here</span>
+          </div>
+        )}
         {hasClips && overlay?.(containerRef)}
+        {hasClips && mediaError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4">
+            <p className="max-w-sm text-center text-xs text-danger">{mediaError}</p>
+          </div>
+        )}
         {!hasClips && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-ink-muted">
             <p className="text-sm">Add clips to the timeline to preview them here</p>

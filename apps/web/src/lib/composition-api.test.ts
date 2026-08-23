@@ -583,3 +583,111 @@ describe("positionOverlayClip", () => {
     expect(next[0]!.transform).toMatchObject({ x: 1720, y: 980 });
   });
 });
+
+describe("removeRangeOnTrack preserves the rest of the timeline", () => {
+  const T = "track_1";
+  function vclip(id: string, startMs: number, durationMs: number, trimInMs = 0): MediaClip {
+    return {
+      id,
+      trackId: T,
+      kind: "video",
+      mediaAssetId: "m1",
+      startMs,
+      durationMs,
+      trimInMs,
+      trimOutMs: 0,
+      volume: 1,
+      muted: false,
+      speedPercent: 100,
+      transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
+      audioPatches: [],
+    };
+  }
+
+  it("shifts later clips back by exactly the cut length, keeping a deliberate gap", () => {
+    // Clip A 0-10s, a deliberate 5s gap, clip B 15-25s. Cutting 2s out of A
+    // must move B to 13s (back by the 2s cut) — NOT to 8s, which is what a
+    // whole-track repack did: it closed the user's gap as a side effect of
+    // an unrelated edit, dragging footage they never touched.
+    const result = removeRangeOnTrack([vclip("a", 0, 10000), vclip("b", 15000, 10000)], T, () => 10000, 3000, 5000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const b = result.clips.find((c) => c.durationMs === 10000)!;
+    expect(b.startMs).toBe(13000);
+  });
+
+  it("closes only the cut's own span, joining the two halves of a split clip", () => {
+    const result = removeRangeOnTrack([vclip("a", 0, 10000)], T, () => 10000, 4000, 6000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const sorted = [...result.clips].sort((a, b) => a.startMs - b.startMs);
+    expect(sorted.map((c) => [c.startMs, c.durationMs])).toEqual([
+      [0, 4000],
+      [4000, 4000],
+    ]);
+  });
+
+  it("does not disturb a clip that sits entirely before the cut", () => {
+    const result = removeRangeOnTrack([vclip("a", 0, 5000), vclip("b", 20000, 10000)], T, () => 10000, 22000, 24000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const a = result.clips.find((c) => c.durationMs === 5000)!;
+    expect(a.startMs).toBe(0);
+  });
+
+  it("keeps the gap when a whole clip is consumed by the cut", () => {
+    // A 0-5s, B 10-15s, C 30-40s. Cutting exactly over B removes it and
+    // pulls C back by 5s, leaving A and the 10-30 spacing otherwise alone.
+    // Each clip spans its whole source, so a cut covering B leaves no
+    // tail of it to keep.
+    const result = removeRangeOnTrack(
+      [vclip("a", 0, 5000), vclip("b", 10000, 5000), vclip("c", 30000, 10000)],
+      T,
+      (c) => c.durationMs + c.trimInMs,
+      10000,
+      15000,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.clips.find((c) => c.durationMs === 5000)!.startMs).toBe(0);
+    expect(result.clips.find((c) => c.durationMs === 10000)!.startMs).toBe(25000);
+    expect(result.clips).toHaveLength(2);
+  });
+});
+
+describe("removeRangeOnTrack keeps the cut clip's own length", () => {
+  const T = "track_1";
+  function vclip(id: string, startMs: number, durationMs: number, trimInMs = 0): MediaClip {
+    return {
+      id, trackId: T, kind: "video", mediaAssetId: "m1", startMs, durationMs, trimInMs, trimOutMs: 0,
+      volume: 1, muted: false, speedPercent: 100,
+      transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 }, audioPatches: [],
+    };
+  }
+
+  it("does not hand back source that was trimmed off, and so cannot overlap the next clip", () => {
+    // A 4s clip taken from a 14.5s source, then a gap, then another clip.
+    // Cutting 1s out of the first must leave a 2s tail — deriving the tail
+    // from the source instead gave 12.5s, which ran straight over clip B
+    // and made every later save fail with "Overlaps another clip".
+    const result = removeRangeOnTrack([vclip("a", 0, 4000), vclip("b", 7000, 4000, 8000)], T, () => 14500, 1000, 2000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const sorted = [...result.clips].sort((a, b) => a.startMs - b.startMs);
+    expect(sorted.map((c) => [c.startMs, c.durationMs])).toEqual([
+      [0, 1000],
+      [1000, 2000],
+      [6000, 4000],
+    ]);
+
+    // And the invariant that actually matters: nothing on the track overlaps.
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]!.startMs).toBeGreaterThanOrEqual(sorted[i - 1]!.startMs + sorted[i - 1]!.durationMs);
+    }
+  });
+});
