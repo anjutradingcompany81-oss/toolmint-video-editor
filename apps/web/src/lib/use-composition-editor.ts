@@ -11,6 +11,7 @@ import {
   newAudioTrack,
   newAudioClip,
   DEFAULT_SUBTITLE_STYLE,
+  type WatermarkRegion,
   type Clip,
   type MediaClip,
   type SubtitleCue,
@@ -63,6 +64,10 @@ export function useCompositionEditor(projectId: string) {
   // drag the voice over along with it.
   const [voiceOverTrackId, setVoiceOverTrackId] = useState<string | null>(null);
   const [voiceOverClips, setVoiceOverClips] = useState<MediaClip[]>([]);
+  // Regions of the original footage to erase on export. Like captions
+  // these are timeline-level data rather than clips, and like captions
+  // they're carried through every save so a clip edit can't drop them.
+  const [watermarkRemovals, setWatermarkRemovals] = useState<WatermarkRegion[]>([]);
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
   const [loading, setLoading] = useState(true);
@@ -81,6 +86,7 @@ export function useCompositionEditor(projectId: string) {
   const overlayTrackIdRef = useRef(overlayTrackId);
   const voiceOverTrackIdRef = useRef(voiceOverTrackId);
   const voiceOverClipsRef = useRef(voiceOverClips);
+  const watermarkRemovalsRef = useRef(watermarkRemovals);
   const subtitlesRef = useRef(subtitles);
   const subtitleStyleRef = useRef(subtitleStyle);
   useEffect(() => {
@@ -91,9 +97,10 @@ export function useCompositionEditor(projectId: string) {
     overlayTrackIdRef.current = overlayTrackId;
     voiceOverTrackIdRef.current = voiceOverTrackId;
     voiceOverClipsRef.current = voiceOverClips;
+    watermarkRemovalsRef.current = watermarkRemovals;
     subtitlesRef.current = subtitles;
     subtitleStyleRef.current = subtitleStyle;
-  }, [clips, overlayClips, timeline, trackId, overlayTrackId, voiceOverTrackId, voiceOverClips, subtitles, subtitleStyle]);
+  }, [clips, overlayClips, timeline, trackId, overlayTrackId, voiceOverTrackId, voiceOverClips, watermarkRemovals, subtitles, subtitleStyle]);
 
   // Undo snapshots BOTH tracks together, so undoing a logo placement can't
   // leave the video track from a different point in history (and vice
@@ -151,6 +158,7 @@ export function useCompositionEditor(projectId: string) {
         setVoiceOverTrackId(voiceOverTrack?.id ?? null);
         setVoiceOverClips(voiceOverTrack ? clipsOnTrack(loadedTimeline.clips, voiceOverTrack.id) : []);
         // Projects saved before captions existed have neither field.
+        setWatermarkRemovals(loadedTimeline.watermarkRemovals ?? []);
         setSubtitles(loadedTimeline.subtitles ?? []);
         setSubtitleStyle(loadedTimeline.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE);
         resetHistory();
@@ -185,6 +193,7 @@ export function useCompositionEditor(projectId: string) {
       extraTracks: Track[] = [],
       captions?: { subtitles: SubtitleCue[]; subtitleStyle: SubtitleStyle },
       nextVoiceOverClips?: MediaClip[],
+      nextWatermarkRemovals?: WatermarkRegion[],
     ) => {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -213,6 +222,7 @@ export function useCompositionEditor(projectId: string) {
             // Captions are only overwritten by an edit that actually
             // changed them; every other save carries the current ones
             // through so a clip edit can't wipe the script.
+            watermarkRemovals: nextWatermarkRemovals ?? watermarkRemovalsRef.current,
             subtitles: captions?.subtitles ?? subtitlesRef.current,
             subtitleStyle: captions?.subtitleStyle ?? subtitleStyleRef.current,
             updatedAt: new Date().toISOString(),
@@ -335,6 +345,15 @@ export function useCompositionEditor(projectId: string) {
     scheduleSave(clipsRef.current, overlayClipsRef.current, [], undefined, []);
   }
 
+  // Watermark regions are geometry the user positions, not a clip edit, so
+  // they save directly and stay out of the clip undo stack - undoing a cut
+  // shouldn't also un-remove a watermark.
+  function updateWatermarkRemovals(next: WatermarkRegion[]) {
+    setWatermarkRemovals(next);
+    watermarkRemovalsRef.current = next;
+    scheduleSave(clipsRef.current, overlayClipsRef.current, [], undefined, undefined, next);
+  }
+
   // Captions are edited as a script, so they're saved directly rather than
   // going through the clip-history stack — undoing a cut should not also
   // revert unrelated caption text.
@@ -381,6 +400,8 @@ export function useCompositionEditor(projectId: string) {
     voiceOverClips,
     placeVoiceOver,
     removeVoiceOver,
+    watermarkRemovals,
+    updateWatermarkRemovals,
     subtitles,
     subtitleStyle,
     updateSubtitles,

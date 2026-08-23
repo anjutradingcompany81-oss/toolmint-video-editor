@@ -28,6 +28,8 @@ import LogoPanel from "./logo-panel";
 import SubtitlesPanel from "./subtitles-panel";
 import VoiceOverPanel from "./voice-over-panel";
 import LogoOverlay from "./logo-overlay";
+import WatermarkOverlay from "./watermark-overlay";
+import WatermarkPanel from "./watermark-panel";
 import { formatTimecode } from "./format";
 
 const DEFAULT_PIXELS_PER_SECOND = 40;
@@ -62,6 +64,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
     clips,
     overlayClips,
     withOverlayClips,
+    watermarkRemovals,
+    updateWatermarkRemovals,
     voiceOverClips,
     placeVoiceOver,
     removeVoiceOver,
@@ -96,6 +100,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
   const [subtitlesOpen, setSubtitlesOpen] = useState(false);
   const [voiceOverOpen, setVoiceOverOpen] = useState(false);
   const [selectedLogoId, setSelectedLogoId] = useState<string | null>(null);
+  const [watermarkOpen, setWatermarkOpen] = useState(false);
+  const [selectedWatermarkId, setSelectedWatermarkId] = useState<string | null>(null);
   const [voiceMarkers, setVoiceMarkers] = useState<VoiceMarker[]>([]);
 
   useEffect(() => {
@@ -511,6 +517,8 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
         subtitlesOpen={subtitlesOpen}
         onToggleVoiceOver={() => setVoiceOverOpen((v) => !v)}
         voiceOverOpen={voiceOverOpen}
+        onToggleWatermark={() => setWatermarkOpen((v) => !v)}
+        watermarkOpen={watermarkOpen}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -531,6 +539,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             onSetActiveClipVolume={(volume) => activeEntry && setClipVolume(activeEntry.clip.id, volume)}
             onSetActiveClipMuted={(muted) => activeEntry && setClipMuted(activeEntry.clip.id, muted)}
             overlay={(containerRef) => (
+              <>
               <LogoOverlay
                 overlayClips={overlayClips}
                 mediaById={mediaById}
@@ -542,6 +551,18 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
                 onSelect={setSelectedLogoId}
                 onMove={moveLogo}
               />
+              {/* Drawn after the logo layer so a removal box being
+                  positioned stays visible on top of an existing logo. */}
+              <WatermarkOverlay
+                regions={watermarkRemovals}
+                canvasWidth={canvasWidth}
+                canvasHeight={canvasHeight}
+                containerRef={containerRef}
+                selectedId={selectedWatermarkId}
+                onSelect={setSelectedWatermarkId}
+                onChange={updateWatermarkRemovals}
+              />
+              </>
             )}
           />
 
@@ -585,6 +606,20 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           onDelete={() => selectedClipId && deleteClip(selectedClipId)}
           onRippleDelete={() => selectedClipId && rippleDelete(selectedClipId)}
           onDuplicate={() => selectedClipId && duplicateSelected(selectedClipId)}
+        />
+
+        <WatermarkPanel
+          open={watermarkOpen}
+          onClose={() => setWatermarkOpen(false)}
+          projectId={projectId}
+          regions={watermarkRemovals}
+          onChange={updateWatermarkRemovals}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
+          playheadMs={player.playheadMs}
+          selectedId={selectedWatermarkId}
+          onSelect={setSelectedWatermarkId}
+          hasClips={clips.length > 0}
         />
 
         <LogoPanel

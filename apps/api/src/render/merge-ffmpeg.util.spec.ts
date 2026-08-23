@@ -339,3 +339,38 @@ describe("buildClipAudioFilterChain", () => {
     expect(filterLines.some((l) => l.includes("concat=n=5:v=0:a=1"))).toBe(true);
   });
 });
+
+describe("watermark removal", () => {
+  it("adds no filter stage when there is nothing to remove", () => {
+    const args = buildMultitrackMergeArgs({ ...BASE_PLAN, visualClips: [buildVisual()], audioClips: [] });
+    expect(args[args.indexOf("-filter_complex") + 1]).not.toContain("delogo");
+  });
+
+  it("erases the marked region of the footage", () => {
+    const args = buildMultitrackMergeArgs({
+      ...BASE_PLAN,
+      visualClips: [buildVisual()],
+      audioClips: [],
+      watermarkRemovals: [{ id: "w1", x: 40, y: 30, width: 200, height: 90 }],
+    });
+    expect(args[args.indexOf("-filter_complex") + 1]).toContain("delogo=x=40:y=30:w=200:h=90");
+  });
+
+  it("removes the watermark BEFORE compositing overlays, so an added logo isn't smeared too", () => {
+    // A watermark-removal box and a logo can easily overlap - both tend to
+    // live in a corner. Order is what keeps the user's own logo intact.
+    const args = buildMultitrackMergeArgs({
+      ...BASE_PLAN,
+      visualClips: [buildVisual(), buildVisual({ kind: "overlay", trackOrder: 1, localPath: "/tmp/logo.png" })],
+      audioClips: [],
+      watermarkRemovals: [{ id: "w1", x: 40, y: 30, width: 200, height: 90 }],
+    });
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    const delogoAt = filter.indexOf("delogo");
+    // The overlay stage that composites the second (overlay-kind) clip.
+    const overlayAt = filter.lastIndexOf("[v1]overlay");
+    expect(delogoAt).toBeGreaterThan(-1);
+    expect(overlayAt).toBeGreaterThan(-1);
+    expect(delogoAt).toBeLessThan(overlayAt);
+  });
+});

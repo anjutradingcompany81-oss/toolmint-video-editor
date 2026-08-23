@@ -166,6 +166,20 @@ export const subtitleStyleSchema = z.object({
 });
 export type SubtitleStyle = z.infer<typeof subtitleStyleSchema>;
 
+// A rectangle of the source footage to erase - a burned-in station logo
+// or stock-footage mark. Canvas pixels, the same space overlay positions
+// use, so a region marked on the preview is the region the renderer
+// erases. Only the geometry is stored; how it is removed is the
+// renderer's business (see render/watermark.util.ts).
+export const watermarkRegionSchema = z.object({
+  id: z.string().min(1),
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+export type WatermarkRegionInput = z.infer<typeof watermarkRegionSchema>;
+
 const DEFAULT_SUBTITLE_STYLE = { fontSizePx: 24, colorHex: "#FFFFFF", outlineHex: "#000000", position: "BOTTOM" as const, burnIn: false };
 
 export const timelineSchema = z
@@ -173,6 +187,9 @@ export const timelineSchema = z
     schemaVersion: z.literal("2.0"),
     tracks: z.array(trackSchema).default([]),
     clips: z.array(clipSchema).default([]),
+    // Defaulted, so every project saved before watermark removal existed
+    // still parses rather than failing to load.
+    watermarkRemovals: z.array(watermarkRegionSchema).default([]),
     subtitles: z.array(subtitleCueSchema).default([]),
     subtitleStyle: subtitleStyleSchema.default(DEFAULT_SUBTITLE_STYLE),
     updatedAt: z.string(),

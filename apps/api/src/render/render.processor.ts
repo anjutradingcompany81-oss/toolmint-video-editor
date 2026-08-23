@@ -185,6 +185,7 @@ export class RenderProcessor implements OnModuleDestroy {
         totalDurationMs,
         quality: exportJob.quality,
         outputPath,
+        watermarkRemovals: timeline.watermarkRemovals,
         burnedSubtitles,
       });
 

@@ -6,6 +6,7 @@ import { ProjectsModule } from "../projects/projects.module";
 import { RenderController } from "./render.controller";
 import { RenderService } from "./render.service";
 import { RenderProcessor } from "./render.processor";
+import { WatermarkPreviewService } from "./watermark-preview.service";
 import { RENDER_QUEUE, RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.constants";
 
 @Module({
@@ -14,6 +15,7 @@ import { RENDER_QUEUE, RENDER_QUEUE_NAME, REDIS_CONNECTION } from "./render.cons
   providers: [
     RenderService,
     RenderProcessor,
+    WatermarkPreviewService,
     {
       provide: REDIS_CONNECTION,
       inject: [ConfigService],

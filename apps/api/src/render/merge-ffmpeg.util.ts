@@ -1,3 +1,4 @@
+import { buildDelogoFilter, type WatermarkRegion } from "./watermark.util";
 // Pure helpers for planning a multitrack render — no file I/O or process
 // spawning, so the filter-graph logic can be unit tested without a real
 // ffmpeg binary.
@@ -209,6 +210,11 @@ export interface MultitrackMergePlan {
   // Set only when the project asks for burned-in captions: the path of an
   // .srt written to the work dir, already escaped for embedding in a
   // filter string, plus the ASS force_style to draw it with.
+  // Regions of the *source footage* to erase (a burned-in station logo or
+  // stock-footage mark). Applied after the video clips composite but
+  // before overlay-track clips, so removing a watermark can never smear a
+  // logo the user added themselves.
+  watermarkRemovals?: WatermarkRegion[];
   burnedSubtitles?: { escapedPath: string; forceStyle: string };
 }
 
@@ -275,6 +281,25 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   // gated to only show during its own [start,end) window.
   let compositeLabel = "base";
   filterParts.push(`[${BASE_VIDEO_INPUT}:v]null[${compositeLabel}]`);
+
+  // Where watermark removal goes: after the last "video" clip has been
+  // composited, and before any overlay-kind clip. Running it on the final
+  // picture instead would smear a logo or watermark the user deliberately
+  // added if the two happened to overlap; running it per-clip would need
+  // the region translated out of canvas coordinates for every clip, which
+  // is exactly the arithmetic this ordering avoids.
+  const lastVideoIndex = orderedVisual.reduce((last, { clip }, i) => (clip.kind === "video" ? i : last), -1);
+  const delogoFilter = buildDelogoFilter(plan.watermarkRemovals ?? [], { width: plan.width, height: plan.height });
+  const applyDelogo = () => {
+    if (!delogoFilter) return;
+    filterParts.push(`[${compositeLabel}]${delogoFilter}[dlg]`);
+    compositeLabel = "dlg";
+  };
+  // A timeline of nothing but overlays has no video clip to key off, so
+  // the removal is applied straight onto the base canvas instead of being
+  // silently dropped.
+  if (lastVideoIndex === -1) applyDelogo();
+
   orderedVisual.forEach(({ clip }, i) => {
     const nextLabel = `comp${i}`;
     const startS = sec(clip.startMs);
@@ -284,6 +309,7 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
         `enable='between(t,${startS},${endS})'[${nextLabel}]`,
     );
     compositeLabel = nextLabel;
+    if (i === lastVideoIndex) applyDelogo();
   });
   // Captions burn in last, on top of every composited clip and overlay, so
   // a logo can't cover them and they read against the final picture.

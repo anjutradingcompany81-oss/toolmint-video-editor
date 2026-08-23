@@ -26,6 +26,8 @@ interface EditorHeaderProps {
   subtitlesOpen: boolean;
   onToggleVoiceOver: () => void;
   voiceOverOpen: boolean;
+  onToggleWatermark: () => void;
+  watermarkOpen: boolean;
 }
 
 export default function EditorHeader({
@@ -46,6 +48,8 @@ export default function EditorHeader({
   subtitlesOpen,
   onToggleVoiceOver,
   voiceOverOpen,
+  onToggleWatermark,
+  watermarkOpen,
 }: EditorHeaderProps) {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -96,6 +100,17 @@ export default function EditorHeader({
           }`}
         >
           Subtitles
+        </button>
+
+        <button
+          onClick={onToggleWatermark}
+          aria-pressed={watermarkOpen}
+          title="Remove a watermark burned into your footage"
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+            watermarkOpen ? "border-brand bg-brand/15 text-brand" : "border-line text-ink hover:border-brand"
+          }`}
+        >
+          Remove Watermark
         </button>
 
         <button
