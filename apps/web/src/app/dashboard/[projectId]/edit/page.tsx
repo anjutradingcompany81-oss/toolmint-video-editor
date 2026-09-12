@@ -787,6 +787,7 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
           open={activePanel === "voiceOver"}
           onClose={closePanel}
           projectId={projectId}
+          totalDurationMs={totalDurationMs}
           onSeek={player.seekTo}
           hasVoiceOverOnTimeline={voiceOverClips.length > 0}
           onPlaced={(asset, durationMs) => {

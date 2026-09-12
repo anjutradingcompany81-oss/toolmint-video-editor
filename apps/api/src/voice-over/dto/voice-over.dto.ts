@@ -54,3 +54,22 @@ export class GenerateVoiceOverDto {
   @Type(() => VoiceOverLineDto)
   lines!: VoiceOverLineDto[];
 }
+
+export class GenerateScriptDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  prompt!: string;
+
+  // How long the finished narration should run — the caller's timeline
+  // duration, so a video-length script actually fits the video instead of
+  // running short or spilling past the end.
+  @IsInt()
+  @Min(1000)
+  targetDurationMs!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  language?: string;
+}

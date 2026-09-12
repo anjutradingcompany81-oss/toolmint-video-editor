@@ -144,6 +144,11 @@ services:
       TRANSFORMERS_CACHE_DIR: /app/.cache/transformers
       HF_HOME: /app/.cache/huggingface
       DIARIZATION_PYTHON_BIN: /app/apps/api/python/.venv/bin/python3
+      # AI Voice Over's "write a script from a prompt". Optional — left
+      # unset, that one button reports itself as not configured; every
+      # other voice-over feature works fine without it. Add
+      # ANTHROPIC_API_KEY to deploy/.env.prod to turn it on.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
       - toolmint_model_cache:/app/.cache
     ports:

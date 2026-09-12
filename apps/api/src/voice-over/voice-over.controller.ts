@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Put, UseGuards } from "@nestjs/comm
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PublicUser } from "../auth/public-user";
-import { GenerateVoiceOverDto, SaveVoiceOverScriptDto } from "./dto/voice-over.dto";
+import { GenerateScriptDto, GenerateVoiceOverDto, SaveVoiceOverScriptDto } from "./dto/voice-over.dto";
 import { VoiceOverService } from "./voice-over.service";
 
 @UseGuards(JwtAuthGuard)
@@ -26,6 +26,19 @@ export class VoiceOverController {
   @Put("script")
   saveScript(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Body() dto: SaveVoiceOverScriptDto) {
     return this.voiceOver.saveScript(user.id, projectId, dto);
+  }
+
+  // Whether this server can write a script from a prompt at all — checked
+  // up front so the UI can explain a missing setting instead of only
+  // finding out after the user has typed a prompt and clicked Generate.
+  @Get("script-gen-status")
+  scriptGenStatus() {
+    return this.voiceOver.scriptGenStatus();
+  }
+
+  @Post("generate-script")
+  generateScript(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Body() dto: GenerateScriptDto) {
+    return this.voiceOver.generateScript(user.id, projectId, dto);
   }
 
   @Post("jobs")

@@ -99,3 +99,20 @@ export function getVoiceOverJob(projectId: string, jobId: string) {
 export function cancelVoiceOverJob(projectId: string, jobId: string) {
   return apiFetch<VoiceOverJob>(`/projects/${projectId}/voice-over/jobs/${jobId}/cancel`, { method: "POST" });
 }
+
+export interface ScriptGenStatus {
+  ready: boolean;
+  requiredEnvVar: string;
+}
+
+export function getScriptGenStatus(projectId: string) {
+  return apiFetch<ScriptGenStatus>(`/projects/${projectId}/voice-over/script-gen-status`);
+}
+
+// Returns plain narration text, one entry per spoken line — no timing, no
+// ids, no voiceId. The caller lays these onto the timeline itself (see
+// script-line-layout.ts), the same way importFromTranscript builds
+// VoiceOverLine[] from raw transcript data.
+export function generateScriptFromPrompt(projectId: string, input: { prompt: string; targetDurationMs: number; language?: string }) {
+  return apiFetch<{ lines: string[] }>(`/projects/${projectId}/voice-over/generate-script`, { method: "POST", body: JSON.stringify(input) });
+}

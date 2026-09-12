@@ -3,9 +3,10 @@ import type { Queue } from "bullmq";
 import { Prisma, VoiceOverJob, VoiceOverStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { ProjectsService } from "../projects/projects.service";
-import { GenerateVoiceOverDto, SaveVoiceOverScriptDto, VoiceOverLineDto } from "./dto/voice-over.dto";
+import { GenerateScriptDto, GenerateVoiceOverDto, SaveVoiceOverScriptDto, VoiceOverLineDto } from "./dto/voice-over.dto";
 import { TtsRegistryService } from "./tts/tts-registry.service";
 import type { TtsProviderStatus } from "./tts/tts-provider";
+import { AnthropicScriptProvider } from "./script-gen/anthropic-script.provider";
 import { VOICE_OVER_QUEUE } from "./voice-over.constants";
 import type { LineTiming } from "./voice-over-mix.util";
 
@@ -22,17 +23,51 @@ export interface VoiceOverJobResponse extends Omit<VoiceOverJob, "lines" | "line
   lineTimings: LineTiming[] | null;
 }
 
+export interface ScriptGenStatus {
+  ready: boolean;
+  requiredEnvVar: string;
+}
+
 @Injectable()
 export class VoiceOverService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly registry: TtsRegistryService,
+    private readonly scriptGen: AnthropicScriptProvider,
     @Inject(VOICE_OVER_QUEUE) private readonly queue: Queue<{ voiceOverJobId: string }>,
   ) {}
 
   providers(): Promise<TtsProviderStatus[]> {
     return this.registry.statuses();
+  }
+
+  scriptGenStatus(): ScriptGenStatus {
+    return { ready: this.scriptGen.readiness() === "READY", requiredEnvVar: this.scriptGen.requiredEnvVar };
+  }
+
+  // Writes a narration script from a topic/prompt rather than the user
+  // typing every line by hand. Returns plain text lines only — no ids, no
+  // voiceId, no timeline position — the editor already owns exactly that
+  // assembly step for imported-from-transcript lines, and doing it again
+  // here would just be a second, divergent implementation of the same
+  // "raw lines -> VoiceOverLine[]" logic.
+  async generateScript(userId: string, projectId: string, dto: GenerateScriptDto): Promise<{ lines: string[] }> {
+    await this.projects.ensureEditable(userId, projectId);
+    if (this.scriptGen.readiness() !== "READY") {
+      throw new BadRequestException(
+        `Script generation is not configured on this server — ${this.scriptGen.requiredEnvVar} is not set. Ask an administrator to configure it.`,
+      );
+    }
+    try {
+      const lines = await this.scriptGen.generateLines(dto.prompt, dto.targetDurationMs, dto.language);
+      return { lines };
+    } catch (err) {
+      // A synchronous request, not a queued job — surface the real reason
+      // as a normal 400 rather than letting it fall through to a bare 500,
+      // which the frontend can't turn into anything the user can act on.
+      throw new BadRequestException(err instanceof Error ? err.message : "Couldn't generate a script.");
+    }
   }
 
   async getScript(userId: string, projectId: string): Promise<VoiceOverScriptResponse> {

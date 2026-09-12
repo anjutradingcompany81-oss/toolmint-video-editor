@@ -7,16 +7,20 @@ import { listMedia, type MediaAsset } from "@/lib/projects-api";
 import {
   ACTIVE_VOICE_OVER_STATUSES,
   cancelVoiceOverJob,
+  generateScriptFromPrompt,
   generateVoiceOver,
+  getScriptGenStatus,
   getVoiceOverJob,
   getVoiceOverProviders,
   getVoiceOverScript,
   listVoiceOverJobs,
   saveVoiceOverScript,
+  type ScriptGenStatus,
   type TtsProviderStatus,
   type VoiceOverJob,
   type VoiceOverLine,
 } from "@/lib/voice-over-api";
+import { layoutScriptLines } from "@/lib/script-line-layout";
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import { formatTimecode } from "./format";
 
@@ -27,6 +31,7 @@ interface VoiceOverPanelProps {
   open: boolean;
   onClose: () => void;
   projectId: string;
+  totalDurationMs: number;
   onSeek: (ms: number) => void;
   onPlaced: (asset: MediaAsset, durationMs: number) => void;
   onRemove: () => void;
@@ -41,6 +46,7 @@ export default function VoiceOverPanel({
   open,
   onClose,
   projectId,
+  totalDurationMs,
   onSeek,
   onPlaced,
   onRemove,
@@ -54,6 +60,9 @@ export default function VoiceOverPanel({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [scriptGenStatus, setScriptGenStatus] = useState<ScriptGenStatus | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [generatingScript, setGeneratingScript] = useState(false);
   // Tracks whether the last generated job's audio is already on the
   // timeline, so the Apply button doesn't invite the user to add it twice.
   const [appliedJobId, setAppliedJobId] = useState<string | null>(null);
@@ -73,15 +82,17 @@ export default function VoiceOverPanel({
       setLoading(true);
       setError(null);
       try {
-        const [providerList, script, jobs] = await Promise.all([
+        const [providerList, script, jobs, genStatus] = await Promise.all([
           getVoiceOverProviders(projectId),
           getVoiceOverScript(projectId),
           listVoiceOverJobs(projectId),
+          getScriptGenStatus(projectId).catch(() => ({ ready: false, requiredEnvVar: "ANTHROPIC_API_KEY" })),
         ]);
         if (cancelled) return;
 
         setProviders(providerList);
         setLines(script.lines);
+        setScriptGenStatus(genStatus);
 
         // Prefer the saved choice, but never select a provider that has
         // since become unusable (a key removed from the server, say).
@@ -192,6 +203,42 @@ export default function VoiceOverPanel({
       setError(err instanceof ApiError ? err.message : "Couldn't import the dialogue.");
     } finally {
       setImporting(false);
+    }
+  }
+
+  // Writes the script from a topic instead of the user typing every line
+  // by hand — the whole point of this button. The model returns plain
+  // text lines with no timing (its own guess at speaking duration isn't
+  // trustworthy); layoutScriptLines spreads them across the actual
+  // project length from their real word counts, the same "raw lines ->
+  // VoiceOverLine[]" assembly importFromTranscript already does above.
+  async function generateFromPrompt() {
+    if (!prompt.trim()) {
+      setError("Write a prompt describing what the voice over should say first.");
+      return;
+    }
+    if (totalDurationMs <= 0) {
+      setError("Add something to the timeline first, so there's a video length to pace the narration to.");
+      return;
+    }
+    setGeneratingScript(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { lines: rawLines } = await generateScriptFromPrompt(projectId, { prompt: prompt.trim(), targetDurationMs: totalDurationMs });
+      const defaultVoice = provider?.voices[0]?.id ?? "";
+      const next: VoiceOverLine[] = layoutScriptLines(rawLines, totalDurationMs).map((l) => ({
+        id: newLineId(),
+        startMs: l.startMs,
+        text: l.text,
+        voiceId: defaultVoice,
+      }));
+      updateLines(next);
+      setNotice(`Wrote ${next.length} line(s) from your prompt, paced to the video's length. Edit any of them, then Generate.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't generate a script.");
+    } finally {
+      setGeneratingScript(false);
     }
   }
 
@@ -339,6 +386,37 @@ export default function VoiceOverPanel({
                   The built-in engine has one fixed speaker per language and cannot imitate a specific person — that needs a cloning-capable
                   engine such as ElevenLabs. Pick from the voice library below instead.
                 </p>
+              )}
+            </div>
+
+            {/* Writes the script from a topic instead of the user typing
+                every line by hand. Shown even when the server can't
+                actually run it, with the missing setting named — same
+                "never hide, always explain" stance as the voice-engine
+                list above. */}
+            <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel/60 p-3">
+              <p className="text-xs uppercase tracking-wide text-ink-muted">Write a script from a prompt</p>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                disabled={generatingScript || scriptGenStatus?.ready === false}
+                placeholder='e.g. "A calm, encouraging narration about the lion and the ant learning to work together"'
+                rows={2}
+                className="resize-none rounded-md border border-line bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-brand disabled:opacity-50"
+              />
+              {scriptGenStatus?.ready === false ? (
+                <p className="text-[11px] leading-snug text-warning">
+                  Not available on this server: <code className="font-mono">{scriptGenStatus.requiredEnvVar}</code> isn&apos;t set. Ask an
+                  administrator to configure it, or write the script by hand below.
+                </p>
+              ) : (
+                <button
+                  onClick={generateFromPrompt}
+                  disabled={generatingScript || !prompt.trim()}
+                  className="rounded-md bg-brand px-3 py-2 text-xs font-medium text-ink hover:bg-brand/90 disabled:opacity-40"
+                >
+                  {generatingScript ? "Writing script…" : "Write Script"}
+                </button>
               )}
             </div>
 
