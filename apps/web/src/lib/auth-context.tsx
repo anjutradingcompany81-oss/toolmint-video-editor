@@ -45,13 +45,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    refreshSession<AuthUser>().then((data) => {
+    async function initSession() {
+      const restored = await refreshSession<AuthUser>();
       if (cancelled) return;
-      if (data) {
+      if (restored) {
+        setUser(restored.user);
+        setStatus("authenticated");
+        return;
+      }
+
+      // No existing session to restore (first visit, or an expired
+      // refresh cookie). Get a REAL one automatically rather than
+      // fabricating a client-only identity with no server-side
+      // counterpart: every JWT-protected endpoint — voice over, voice
+      // correction, exports — needs an actual access token, not just a
+      // user object that looks signed in. Confirmed live: without this,
+      // direct mode "worked" only for the two modules (projects, media)
+      // that happen to have their own localStorage fallback; everything
+      // else 401'd.
+      try {
+        const data = await apiFetch<AuthResponse>("/auth/guest", { method: "POST" });
+        if (cancelled) return;
+        setAccessToken(data.accessToken);
         setUser(data.user);
         setStatus("authenticated");
-      } else {
-        // Retain direct mode user so user is never blocked by login screen
+      } catch {
+        // The backend itself is unreachable — fall back to a client-only
+        // identity so the user is never blocked by a login screen, same
+        // as before. This is now the genuine last resort, not the
+        // default path.
+        if (cancelled) return;
         const stored = typeof window !== "undefined" ? localStorage.getItem("procut_user") : null;
         if (stored) {
           try {
@@ -64,8 +87,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setStatus("authenticated");
       }
-    });
+    }
 
+    initSession();
     return () => {
       cancelled = true;
     };
