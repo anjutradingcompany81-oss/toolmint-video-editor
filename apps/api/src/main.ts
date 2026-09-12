@@ -4,6 +4,7 @@ import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppModule } from "./app.module";
+import { buildAllowedOrigins, isAllowedOrigin } from "./cors-origin.util";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,8 +12,15 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
+  // Accepts both the bare-domain and "www." form of whichever host is
+  // configured — landing on the one CORS doesn't recognize otherwise
+  // breaks every API call with no visible reason on the page itself
+  // (confirmed live: toolmint.co.in vs. www.toolmint.co.in).
+  const allowedOrigins = buildAllowedOrigins(config.get<string>("WEB_APP_URL", "http://localhost:3000"));
   app.enableCors({
-    origin: config.get<string>("WEB_APP_URL", "http://localhost:3000"),
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      callback(null, isAllowedOrigin(origin, allowedOrigins));
+    },
     credentials: true,
   });
 
