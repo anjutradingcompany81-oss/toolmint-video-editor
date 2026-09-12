@@ -1,4 +1,4 @@
-import { apiFetch } from "./api-client";
+import { API_BASE_URL, apiFetch, ApiError, getAccessToken } from "./api-client";
 
 export type VoiceOverStatus = "QUEUED" | "SYNTHESIZING" | "MIXING" | "COMPLETED" | "FAILED" | "CANCELLED";
 
@@ -115,4 +115,35 @@ export function getScriptGenStatus(projectId: string) {
 // VoiceOverLine[] from raw transcript data.
 export function generateScriptFromPrompt(projectId: string, input: { prompt: string; targetDurationMs: number; language?: string }) {
   return apiFetch<{ lines: string[] }>(`/projects/${projectId}/voice-over/generate-script`, { method: "POST", body: JSON.stringify(input) });
+}
+
+// Returns playable audio bytes directly rather than JSON, so this can't
+// go through apiFetch (which always parses the body as JSON) — built by
+// hand the same way apiFetch attaches the token and reads an error body,
+// just returning a Blob instead of a parsed object on success.
+export async function previewVoiceOverVoice(projectId: string, input: { providerId: string; voiceId: string }): Promise<Blob> {
+  const token = getAccessToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE_URL}/projects/${projectId}/voice-over/preview-voice`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const message = await res.text().catch(() => "");
+    let detail = res.statusText || "Couldn't preview this voice.";
+    try {
+      const parsed: unknown = message ? JSON.parse(message) : null;
+      if (parsed && typeof parsed === "object" && "message" in parsed && typeof (parsed as { message: unknown }).message === "string") {
+        detail = (parsed as { message: string }).message;
+      }
+    } catch {
+      // Not JSON — fall back to statusText above.
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
 }

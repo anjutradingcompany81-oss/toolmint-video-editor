@@ -3,12 +3,13 @@ import type { Queue } from "bullmq";
 import { Prisma, VoiceOverJob, VoiceOverStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { ProjectsService } from "../projects/projects.service";
-import { GenerateScriptDto, GenerateVoiceOverDto, SaveVoiceOverScriptDto, VoiceOverLineDto } from "./dto/voice-over.dto";
+import { GenerateScriptDto, GenerateVoiceOverDto, PreviewVoiceDto, SaveVoiceOverScriptDto, VoiceOverLineDto } from "./dto/voice-over.dto";
 import { TtsRegistryService } from "./tts/tts-registry.service";
 import type { TtsProviderStatus } from "./tts/tts-provider";
 import { AnthropicScriptProvider } from "./script-gen/anthropic-script.provider";
+import { samplePhraseForLanguage } from "./voice-preview-sample.util";
 import { VOICE_OVER_QUEUE } from "./voice-over.constants";
-import type { LineTiming } from "./voice-over-mix.util";
+import { encodeWav, type LineTiming } from "./voice-over-mix.util";
 
 const ACTIVE_STATUSES: VoiceOverStatus[] = [VoiceOverStatus.QUEUED, VoiceOverStatus.SYNTHESIZING, VoiceOverStatus.MIXING];
 
@@ -40,6 +41,31 @@ export class VoiceOverService {
 
   providers(): Promise<TtsProviderStatus[]> {
     return this.registry.statuses();
+  }
+
+  // Lets a user hear what a voice sounds like before writing any real
+  // script — a fixed short phrase, synthesized on demand rather than
+  // pre-recorded, so a newly-added voice is auditionable immediately with
+  // no separate asset pipeline. Returns raw WAV bytes rather than a job:
+  // this is a two-second clip, not something worth a queue round trip.
+  async previewVoice(userId: string, projectId: string, dto: PreviewVoiceDto): Promise<Buffer> {
+    await this.projects.findOne(userId, projectId); // read access is enough — auditioning a voice doesn't change the project
+
+    const provider = this.registry.get(dto.providerId);
+    if (!provider) throw new BadRequestException(`Unknown voice provider "${dto.providerId}"`);
+    if (provider.readiness() !== "READY") {
+      throw new BadRequestException(
+        `${provider.label} is not configured on this server${provider.requiredEnvVar ? ` — ${provider.requiredEnvVar} is not set` : ""}.`,
+      );
+    }
+
+    const voices = await provider.listVoices();
+    const voice = voices.find((v) => v.id === dto.voiceId);
+    if (voices.length > 0 && !voice) throw new BadRequestException(`"${dto.voiceId}" is not a voice offered by ${provider.label}`);
+
+    const sampleText = samplePhraseForLanguage(voice?.language ?? "en");
+    const result = await provider.synthesize({ text: sampleText, voiceId: dto.voiceId });
+    return encodeWav(result.samples, result.sampleRate);
   }
 
   scriptGenStatus(): ScriptGenStatus {

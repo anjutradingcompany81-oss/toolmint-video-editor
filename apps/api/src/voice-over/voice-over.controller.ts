@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Put, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PublicUser } from "../auth/public-user";
-import { GenerateScriptDto, GenerateVoiceOverDto, SaveVoiceOverScriptDto } from "./dto/voice-over.dto";
+import { GenerateScriptDto, GenerateVoiceOverDto, PreviewVoiceDto, SaveVoiceOverScriptDto } from "./dto/voice-over.dto";
 import { VoiceOverService } from "./voice-over.service";
 
 @UseGuards(JwtAuthGuard)
@@ -39,6 +40,28 @@ export class VoiceOverController {
   @Post("generate-script")
   generateScript(@CurrentUser() user: PublicUser, @Param("projectId") projectId: string, @Body() dto: GenerateScriptDto) {
     return this.voiceOver.generateScript(user.id, projectId, dto);
+  }
+
+  // A short spoken sample so a voice can be auditioned before writing any
+  // real script — raw WAV bytes, not JSON, since this is audio to play
+  // immediately rather than a resource with an id.
+  //
+  // @Res() WITHOUT passthrough, and res.send() rather than a return value:
+  // with passthrough (or a plain return), Nest's own response pipeline
+  // still owns the body and JSON-serializes it — a returned Buffer comes
+  // out as `{"type":"Buffer","data":[...]}` instead of audio bytes
+  // (confirmed live, not just a theoretical concern). Taking over the
+  // response directly is what actually sends raw bytes.
+  @Post("preview-voice")
+  async previewVoice(
+    @Res() res: Response,
+    @CurrentUser() user: PublicUser,
+    @Param("projectId") projectId: string,
+    @Body() dto: PreviewVoiceDto,
+  ) {
+    const wav = await this.voiceOver.previewVoice(user.id, projectId, dto);
+    res.set({ "Content-Type": "audio/wav", "Content-Length": String(wav.length) });
+    res.send(wav);
   }
 
   @Post("jobs")

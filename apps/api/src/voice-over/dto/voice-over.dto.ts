@@ -73,3 +73,13 @@ export class GenerateScriptDto {
   @MaxLength(40)
   language?: string;
 }
+
+export class PreviewVoiceDto {
+  @IsString()
+  @MinLength(1)
+  providerId!: string;
+
+  @IsString()
+  @MinLength(1)
+  voiceId!: string;
+}

@@ -14,6 +14,7 @@ import {
   getVoiceOverProviders,
   getVoiceOverScript,
   listVoiceOverJobs,
+  previewVoiceOverVoice,
   saveVoiceOverScript,
   type ScriptGenStatus,
   type TtsProviderStatus,
@@ -21,7 +22,7 @@ import {
   type VoiceOverLine,
 } from "@/lib/voice-over-api";
 import { layoutScriptLines } from "@/lib/script-line-layout";
-import { PlusIcon, TrashIcon } from "@/components/icons";
+import { PlayIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import { formatTimecode } from "./format";
 
 const SCRIPT_SAVE_DEBOUNCE_MS = 1200;
@@ -63,11 +64,17 @@ export default function VoiceOverPanel({
   const [scriptGenStatus, setScriptGenStatus] = useState<ScriptGenStatus | null>(null);
   const [prompt, setPrompt] = useState("");
   const [generatingScript, setGeneratingScript] = useState(false);
+  // Which voice's sample is currently being fetched/played, so the button
+  // clicked can show its own "Playing…" state instead of every voice in
+  // the list looking busy at once.
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
   // Tracks whether the last generated job's audio is already on the
   // timeline, so the Apply button doesn't invite the user to add it twice.
   const [appliedJobId, setAppliedJobId] = useState<string | null>(null);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
   const provider = providers?.find((p) => p.id === providerId) ?? null;
   const readyProviders = providers?.filter((p) => p.readiness === "READY") ?? [];
 
@@ -152,6 +159,13 @@ export default function VoiceOverPanel({
   );
 
   useEffect(() => () => void (saveTimer.current && clearTimeout(saveTimer.current)), []);
+
+  useEffect(
+    () => () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    },
+    [],
+  );
 
   function updateLines(next: VoiceOverLine[]) {
     setLines(next);
@@ -239,6 +253,35 @@ export default function VoiceOverPanel({
       setError(err instanceof ApiError ? err.message : "Couldn't generate a script.");
     } finally {
       setGeneratingScript(false);
+    }
+  }
+
+  // Auditions one voice with a short fixed sample — in the voice's own
+  // language, spoken by this same engine — so a choice can be made before
+  // committing to a whole script. Reuses one <audio> element across
+  // previews rather than creating a fresh one each click, so clicking a
+  // second voice while the first is still playing cuts it off instead of
+  // overlapping two clips.
+  async function previewVoice(voiceId: string) {
+    setError(null);
+    setPreviewingVoiceId(voiceId);
+    try {
+      const blob = await previewVoiceOverVoice(projectId, { providerId, voiceId });
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+
+      let audio = previewAudioRef.current;
+      if (!audio) {
+        audio = new Audio();
+        previewAudioRef.current = audio;
+      }
+      audio.src = url;
+      audio.onended = () => setPreviewingVoiceId((current) => (current === voiceId ? null : current));
+      await audio.play();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't preview this voice.");
+      setPreviewingVoiceId((current) => (current === voiceId ? null : current));
     }
   }
 
@@ -386,6 +429,35 @@ export default function VoiceOverPanel({
                   The built-in engine has one fixed speaker per language and cannot imitate a specific person — that needs a cloning-capable
                   engine such as ElevenLabs. Pick from the voice library below instead.
                 </p>
+              )}
+            </div>
+
+            {/* Hearing a voice is the whole point of picking one — a name
+                and a language tag don't tell you what it actually sounds
+                like. Each button synthesizes and plays a short fixed
+                sample on demand rather than shipping pre-recorded audio,
+                so a voice is auditionable the moment it appears here. */}
+            <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel/60 p-3">
+              <p className="text-xs uppercase tracking-wide text-ink-muted">Preview a voice</p>
+              {provider && provider.voices.length > 0 ? (
+                <ul className="flex flex-col gap-1.5">
+                  {provider.voices.map((v) => (
+                    <li key={v.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface px-2.5 py-1.5">
+                      <span className="text-xs text-ink">{v.label}</span>
+                      <button
+                        onClick={() => previewVoice(v.id)}
+                        disabled={previewingVoiceId === v.id}
+                        title={`Play a short sample of ${v.label}`}
+                        className="flex shrink-0 items-center gap-1 rounded border border-line px-2 py-1 text-[11px] text-ink hover:border-brand disabled:opacity-50"
+                      >
+                        <PlayIcon width={10} height={10} />
+                        {previewingVoiceId === v.id ? "Playing…" : "Sample"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[11px] text-ink-muted">Pick a ready voice engine above to see its voices here.</p>
               )}
             </div>
 
