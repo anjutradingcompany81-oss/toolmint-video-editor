@@ -93,6 +93,33 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
     if (videoRef.current) videoRef.current.playbackRate = rate;
   }, []);
 
+  const preloaderRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const p = document.createElement("video");
+      p.preload = "auto";
+      p.muted = true;
+      preloaderRef.current = p;
+    }
+    return () => {
+      if (preloaderRef.current) {
+        preloaderRef.current.src = "";
+        preloaderRef.current = null;
+      }
+    };
+  }, []);
+
+  const preloadNextClip = useCallback((currentIndex: number) => {
+    const nextEntry = layoutRef.current[currentIndex + 1];
+    if (nextEntry?.asset?.previewUrl && preloaderRef.current) {
+      if (preloaderRef.current.src !== nextEntry.asset.previewUrl) {
+        preloaderRef.current.src = nextEntry.asset.previewUrl;
+        preloaderRef.current.load();
+      }
+    }
+  }, []);
+
   const loadEntry = useCallback(
     (index: number, localOffsetMs: number, autoplay: boolean) => {
       const entry = layoutRef.current[index];
@@ -102,6 +129,8 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
       clearGapTimer();
       setInGap(false);
       activeIndexRef.current = index;
+      preloadNextClip(index);
+
       // Never seek outside the clip's own span: a caller landing slightly
       // early (rounding, or a gap boundary) would otherwise ask the element
       // for a negative source time.
@@ -150,7 +179,7 @@ export function useTimelinePlayer(layout: ClipLayoutEntry[], totalDurationMs: nu
         if (autoplay) video.play().catch(() => undefined);
       }
     },
-    [applyClipAV, clearGapTimer],
+    [applyClipAV, clearGapTimer, preloadNextClip],
   );
 
   // Runs the playhead through a gap in real time, then picks the next clip

@@ -688,6 +688,13 @@ export default function EditorPage({ params }: { params: Promise<{ projectId: st
             audioClips={audioClips}
             audioNameOf={(id: string) => mediaById.get(id)?.originalName ?? "Audio"}
             onRemoveAudioClip={removeAudioClip}
+            overlayClips={overlayClips}
+            overlayNameOf={(id: string) => mediaById.get(id)?.originalName ?? "Overlay"}
+            onRemoveOverlayClip={(clipId) => withOverlayClips((prev) => prev.filter((c) => c.id !== clipId))}
+            voiceOverClips={voiceOverClips}
+            voiceOverNameOf={(id: string) => mediaById.get(id)?.originalName ?? "Voiceover"}
+            onRemoveVoiceOverClip={removeVoiceOver}
+            subtitles={subtitles}
             layout={layout}
             totalDurationMs={totalDurationMs}
             playheadMs={player.playheadMs}

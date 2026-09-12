@@ -45,7 +45,21 @@ RUN npm run build --workspace apps/api
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apt-get update && apt-get install -y --no-install-recommends openssl python3 python3-venv python3-pip && rm -rf /var/lib/apt/lists/*
+# Fonts are a real runtime dependency, not an optional extra. This image
+# had none at all: /usr/share/fonts did not exist and fc-list was empty,
+# so anything that draws glyphs had nothing to draw them with. Burned-in
+# subtitles go through libass, which finds fonts via fontconfig, and text
+# clips pass an explicit font file to ffmpeg's drawtext.
+#
+# DejaVu covers Latin. Noto is here for Devanagari specifically: this
+# editor is used on Hindi footage, and without it Hindi titles and
+# captions render as empty boxes rather than words - a failure that looks
+# like a bug in the text feature rather than a missing font.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl python3 python3-venv python3-pip \
+      fontconfig fonts-dejavu-core fonts-noto-core \
+    && fc-cache -f \
+    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json

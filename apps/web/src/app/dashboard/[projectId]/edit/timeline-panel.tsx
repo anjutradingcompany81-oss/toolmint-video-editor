@@ -103,6 +103,16 @@ interface TimelinePanelProps {
   audioClips: MediaClip[];
   audioNameOf: (mediaAssetId: string) => string;
   onRemoveAudioClip: (clipId: string) => void;
+  /** Clips on the overlay/logo track */
+  overlayClips?: MediaClip[];
+  overlayNameOf?: (mediaAssetId: string) => string;
+  onRemoveOverlayClip?: (clipId: string) => void;
+  /** Clips on the AI voice-over track */
+  voiceOverClips?: MediaClip[];
+  voiceOverNameOf?: (mediaAssetId: string) => string;
+  onRemoveVoiceOverClip?: (clipId: string) => void;
+  /** Subtitle cues */
+  subtitles?: { id: string; startMs: number; endMs: number; text: string }[];
   onToggleRazorMode: () => void;
   onRazorClick: (ms: number) => void;
   // AI Repetitive Voice Remover: colored indicators over detected
@@ -221,6 +231,13 @@ export default function TimelinePanel({
   audioClips,
   audioNameOf,
   onRemoveAudioClip,
+  overlayClips = [],
+  overlayNameOf = () => "Overlay",
+  onRemoveOverlayClip,
+  voiceOverClips = [],
+  voiceOverNameOf = () => "Voiceover",
+  onRemoveVoiceOverClip,
+  subtitles = [],
   onToggleRazorMode,
   onRazorClick,
   voiceMarkers = [],
@@ -280,8 +297,14 @@ export default function TimelinePanel({
     layout.forEach((e) => {
       points.push(e.startMs, e.startMs + e.durationMs);
     });
+    audioClips.forEach((c) => {
+      points.push(c.startMs, c.startMs + c.durationMs);
+    });
+    voiceOverClips.forEach((c) => {
+      points.push(c.startMs, c.startMs + c.durationMs);
+    });
     return points;
-  }, [layout, totalDurationMs, playheadMs]);
+  }, [layout, totalDurationMs, playheadMs, audioClips, voiceOverClips]);
 
   function msFromClientX(clientX: number): number {
     const rect = trackRef.current?.getBoundingClientRect();
@@ -351,12 +374,12 @@ export default function TimelinePanel({
   const selectionLeftX = hasSelectionPreview ? (selectionStartMs! / 1000) * pixelsPerSecond : 0;
   const selectionWidthPx = hasSelectionPreview ? ((selectionEndMs! - selectionStartMs!) / 1000) * pixelsPerSecond : 0;
 
+  const hasAnyTimelineContent =
+    layout.length > 0 || audioClips.length > 0 || overlayClips.length > 0 || voiceOverClips.length > 0 || subtitles.length > 0;
+
   return (
-    /* Height grows with the controls it actually contains rather than being
-       pinned to a fixed h-64: the toolbar wraps on narrower windows and the
-       pan row appears only for long projects, and at a fixed height those
-       pushed the full-duration scrubber off the bottom of the screen. */
-    <div className="flex max-h-[45vh] min-h-56 shrink-0 flex-col border-t border-line bg-surface-2">
+    <div className="flex max-h-[50vh] min-h-64 shrink-0 flex-col border-t border-line bg-surface-2">
+      {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
         <button
           onClick={onSplit}
@@ -399,7 +422,7 @@ export default function TimelinePanel({
           title="Cut the selected section and join the remainder (Delete)"
           className="flex items-center gap-1 rounded-md bg-danger px-2.5 py-1 text-xs font-medium text-ink hover:bg-danger/90 disabled:bg-line disabled:text-ink-muted"
         >
-          <TrashIcon width={12} height={12} /> Cut Selected Portion
+          <TrashIcon width={12} height={12} /> Cut Selection
         </button>
 
         <button
@@ -411,11 +434,6 @@ export default function TimelinePanel({
           <CopyIcon width={12} height={12} /> Duplicate
         </button>
 
-        {/* Deleting closes the gap by default. Leaving a hole behind and
-            making the user press a second, differently-named button to
-            tidy it up is not what "delete this clip" means to anyone; the
-            leave-a-gap variant is still here for when it's wanted, just no
-            longer the thing you get by accident. */}
         <button
           onClick={onRippleDeleteSelected}
           disabled={!selectedClipId}
@@ -467,14 +485,10 @@ export default function TimelinePanel({
         </div>
       </div>
 
-      {/* Audio-only counts as a timeline. Keying the empty state on the
-          video track alone hid a whole batch of uploaded audio behind
-          "add some media" — the clips were saved and would export, but the
-          editor showed nothing at all. */}
-      {layout.length === 0 && audioClips.length === 0 ? (
+      {!hasAnyTimelineContent ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 text-ink-muted">
           <PlusIcon width={20} height={20} />
-          <p className="text-sm">Add media from the left panel to build your timeline</p>
+          <p className="text-sm">Add media from the left panel to build your multi-track timeline</p>
         </div>
       ) : (
         <div
@@ -488,9 +502,9 @@ export default function TimelinePanel({
             handleTrackPointerUp();
             handleSelectionHandlePointerUp();
           }}
-          className={`relative flex-1 overflow-x-auto overflow-y-hidden px-2 pt-6 ${razorMode ? "cursor-crosshair" : "cursor-text"}`}
+          className={`relative flex-1 overflow-x-auto overflow-y-auto px-2 pt-6 pb-2 ${razorMode ? "cursor-crosshair" : "cursor-text"}`}
         >
-          <div style={{ width: contentWidth, position: "relative" }}>
+          <div style={{ width: contentWidth, position: "relative" }} className="flex flex-col gap-1.5">
             {/* Ruler */}
             <div className="pointer-events-none absolute -top-6 left-0 h-5 w-full">
               {rulerMarks.map((ms) => (
@@ -519,31 +533,103 @@ export default function TimelinePanel({
               </div>
             )}
 
-            {/* Clip row — each block is absolutely positioned by its own
-                startMs (free timeline placement), not flowed by flexbox,
-                so a real gap or a clip dragged well past its neighbors
-                renders exactly where it actually is. */}
-            <div className="relative h-20">
-              {layout.map((entry) => (
-                <TimelineClipBlock
-                  key={entry.clip.id}
-                  entry={entry}
-                  pixelsPerSecond={pixelsPerSecond}
-                  selected={selectedClipId === entry.clip.id}
-                  snapPoints={snapPoints}
-                  onSelect={() => onSelectClip(entry.clip.id)}
-                  onTrim={(_edge, trimInMs, trimOutMs) => onTrim(entry.clip.id, trimInMs, trimOutMs)}
-                  onMove={onMoveClip}
-                />
-              ))}
+            {/* TRACK 1: Overlays / Logos (V2) - only if overlay clips exist */}
+            {overlayClips.length > 0 && (
+              <div className="relative flex h-8 items-center rounded border border-purple-500/30 bg-purple-950/20">
+                <span className="sticky left-0 z-10 rounded bg-purple-900/80 px-1.5 py-0.5 text-[9px] font-bold text-purple-200 shadow">
+                  V2 OVERLAY
+                </span>
+                {overlayClips.map((clip, i) => (
+                  <div
+                    key={clip.id}
+                    onClick={() => onSeek(clip.startMs)}
+                    style={{
+                      position: "absolute",
+                      left: (clip.startMs / 1000) * pixelsPerSecond,
+                      width: Math.max(8, (clip.durationMs / 1000) * pixelsPerSecond),
+                    }}
+                    className="group/overlay top-0 flex h-full cursor-pointer items-center gap-1 overflow-hidden rounded border border-purple-500/50 bg-purple-600/30 px-1.5 hover:border-purple-400"
+                  >
+                    <span className="truncate text-[10px] font-medium text-purple-100">{overlayNameOf(clip.mediaAssetId)}</span>
+                    {onRemoveOverlayClip && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveOverlayClip(clip.id);
+                        }}
+                        title="Remove overlay"
+                        className="ml-auto shrink-0 opacity-0 group-hover/overlay:opacity-100"
+                      >
+                        <TrashIcon width={10} height={10} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* TRACK 2: Main Video (V1) */}
+            <div className="relative min-h-[5rem]">
+              <span className="sticky left-0 z-10 mb-1 inline-block rounded bg-panel/90 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-ink-muted">
+                V1 MAIN VIDEO
+              </span>
+              <div className="relative h-20">
+                {layout.map((entry) => (
+                  <TimelineClipBlock
+                    key={entry.clip.id}
+                    entry={entry}
+                    pixelsPerSecond={pixelsPerSecond}
+                    selected={selectedClipId === entry.clip.id}
+                    snapPoints={snapPoints}
+                    onSelect={() => onSelectClip(entry.clip.id)}
+                    onTrim={(_edge, trimInMs, trimOutMs) => onTrim(entry.clip.id, trimInMs, trimOutMs)}
+                    onMove={onMoveClip}
+                  />
+                ))}
+              </div>
             </div>
 
-            {/* Uploaded audio gets its own lane. Without it a batch of
-                audio files would be added, saved and exported while being
-                completely invisible on the timeline — the user would have
-                no way to see what they had, or in what order. */}
+            {/* TRACK 3: Voiceover / Narration (A1) */}
+            {voiceOverClips.length > 0 && (
+              <div className="relative flex h-9 items-center rounded border border-emerald-500/30 bg-emerald-950/20">
+                <span className="sticky left-0 z-10 rounded bg-emerald-900/80 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200 shadow">
+                  A1 VOICEOVER
+                </span>
+                {voiceOverClips.map((clip, i) => (
+                  <div
+                    key={clip.id}
+                    onClick={() => onSeek(clip.startMs)}
+                    style={{
+                      position: "absolute",
+                      left: (clip.startMs / 1000) * pixelsPerSecond,
+                      width: Math.max(8, (clip.durationMs / 1000) * pixelsPerSecond),
+                    }}
+                    className="group/vo top-0 flex h-full cursor-pointer items-center gap-1 overflow-hidden rounded border border-emerald-500/50 bg-emerald-600/30 px-1.5 hover:border-emerald-400"
+                  >
+                    <span className="truncate text-[10px] text-emerald-100">{voiceOverNameOf(clip.mediaAssetId)}</span>
+                    {onRemoveVoiceOverClip && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveVoiceOverClip(clip.id);
+                        }}
+                        title="Remove voiceover"
+                        className="ml-auto shrink-0 opacity-0 group-hover/vo:opacity-100"
+                      >
+                        <TrashIcon width={10} height={10} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* TRACK 4: Audio / BGM / SFX (A2) */}
             {audioClips.length > 0 && (
-              <div className="relative mt-1 h-11 rounded bg-panel/40">
+              <div className="relative flex h-9 items-center rounded border border-blue-500/30 bg-blue-950/20">
+                <span className="sticky left-0 z-10 rounded bg-blue-900/80 px-1.5 py-0.5 text-[9px] font-bold text-blue-200 shadow">
+                  A2 AUDIO
+                </span>
                 {audioClips.map((clip, i) => (
                   <div
                     key={clip.id}
@@ -552,34 +638,55 @@ export default function TimelinePanel({
                     style={{
                       position: "absolute",
                       left: (clip.startMs / 1000) * pixelsPerSecond,
-                      width: Math.max(6, (clip.durationMs / 1000) * pixelsPerSecond),
+                      width: Math.max(8, (clip.durationMs / 1000) * pixelsPerSecond),
                     }}
-                    className="group/audio top-0 flex h-full cursor-pointer items-center gap-1 overflow-hidden rounded border border-brand/40 bg-brand/20 px-1.5 hover:border-brand"
+                    className="group/audio top-0 flex h-full cursor-pointer items-center gap-1 overflow-hidden rounded border border-brand/50 bg-brand/30 px-1.5 hover:border-brand"
                   >
-                    <span className="shrink-0 rounded bg-brand/30 px-1 text-[10px] tabular-nums text-ink">{i + 1}</span>
+                    <span className="shrink-0 rounded bg-brand/40 px-1 text-[9px] tabular-nums text-ink">{i + 1}</span>
                     <span className="truncate text-[10px] text-ink">{audioNameOf(clip.mediaAssetId)}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onRemoveAudioClip(clip.id);
                       }}
-                      title="Remove this audio clip"
+                      title="Remove audio clip"
                       className="ml-auto shrink-0 opacity-0 transition-opacity group-hover/audio:opacity-100"
                     >
-                      <TrashIcon width={11} height={11} />
+                      <TrashIcon width={10} height={10} />
                     </button>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Unwanted-section selection: highlighted range with
-                draggable edge handles, shown as soon as In is marked
-                (previewing to the playhead) and finalized once Out is
-                marked too. */}
+            {/* TRACK 5: Subtitles / Captions (CC) */}
+            {subtitles.length > 0 && (
+              <div className="relative flex h-7 items-center rounded border border-amber-500/30 bg-amber-950/20">
+                <span className="sticky left-0 z-10 rounded bg-amber-900/80 px-1.5 py-0.5 text-[9px] font-bold text-amber-200 shadow">
+                  CC SUBTITLES
+                </span>
+                {subtitles.map((sub) => (
+                  <div
+                    key={sub.id}
+                    onClick={() => onSeek(sub.startMs)}
+                    title={sub.text}
+                    style={{
+                      position: "absolute",
+                      left: (sub.startMs / 1000) * pixelsPerSecond,
+                      width: Math.max(6, ((sub.endMs - sub.startMs) / 1000) * pixelsPerSecond),
+                    }}
+                    className="top-0 flex h-full cursor-pointer items-center overflow-hidden rounded border border-amber-500/40 bg-amber-500/20 px-1 text-[9px] text-amber-100 hover:border-amber-400"
+                  >
+                    <span className="truncate">{sub.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Selection preview highlight */}
             {hasSelectionPreview && (
               <div
-                className={`absolute bottom-0 top-0 z-20 border-x-2 ${
+                className={`pointer-events-none absolute bottom-0 top-0 z-20 border-x-2 ${
                   markOutMs !== null ? "border-danger bg-danger/25" : "border-danger/60 bg-danger/10"
                 }`}
                 style={{ left: selectionLeftX, width: Math.max(2, selectionWidthPx) }}
@@ -588,13 +695,13 @@ export default function TimelinePanel({
                   data-edge="start"
                   onPointerDown={handleSelectionHandlePointerDown}
                   title="Drag to adjust the start of the selection"
-                  className="absolute inset-y-0 left-0 z-20 w-2.5 -translate-x-1/2 cursor-ew-resize"
+                  className="pointer-events-auto absolute inset-y-0 left-0 z-20 w-2.5 -translate-x-1/2 cursor-ew-resize"
                 />
                 <div
                   data-edge="end"
                   onPointerDown={handleSelectionHandlePointerDown}
                   title="Drag to adjust the end of the selection"
-                  className="absolute inset-y-0 right-0 z-20 w-2.5 translate-x-1/2 cursor-ew-resize"
+                  className="pointer-events-auto absolute inset-y-0 right-0 z-20 w-2.5 translate-x-1/2 cursor-ew-resize"
                 />
               </div>
             )}
@@ -607,9 +714,7 @@ export default function TimelinePanel({
         </div>
       )}
 
-      {/* Horizontal pan. Only meaningful once the timeline is wider than
-          the panel, so it's hidden rather than shown disabled when the
-          whole project already fits. */}
+      {/* Horizontal pan */}
       {scroll.max > 0 && (
         <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-1.5">
           <span className="shrink-0 text-[10px] uppercase tracking-wide text-ink-muted">Scroll timeline</span>

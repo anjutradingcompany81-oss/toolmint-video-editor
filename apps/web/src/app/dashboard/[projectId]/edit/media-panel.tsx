@@ -210,28 +210,34 @@ export default function MediaPanel({ projectId, media, onMediaAdded, onMediaDele
   );
 }
 
-// Offers a whole set of same-kind media as one ordered batch. Only shown
-// for two or more, since "add all" of a single file is just the button
-// already on that file's row.
+// Offers a whole set of same-kind media as one ordered batch.
 function BulkAddBanner({ label, assets, onAdd }: { label: string; assets: MediaAsset[]; onAdd: () => void }) {
   if (assets.length < 2) return null;
+  const isVideo = label.includes("scene") || label.includes("video");
   return (
-    <div className="border-b border-line bg-panel/60 p-3">
-      <p className="text-xs font-medium text-ink">
-        {assets.length} {label} ready
-      </p>
-      <ol className="mt-1.5 max-h-24 overflow-y-auto text-[11px] text-ink-muted">
+    <div className={`border-b border-line p-3 ${isVideo ? "bg-brand/10 border-brand/40" : "bg-panel/60"}`}>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-ink flex items-center gap-1.5">
+          {isVideo && <span>✨</span>}
+          <span>{assets.length} {label} auto-detected</span>
+        </p>
+        <span className="rounded bg-brand/20 px-1.5 py-0.2 text-[10px] font-medium text-brand">Numbered</span>
+      </div>
+      <ol className="mt-1.5 max-h-24 overflow-y-auto text-[11px] text-ink-muted divide-y divide-line/30">
         {assets.map((asset, i) => (
-          <li key={asset.id} className="flex gap-1.5 truncate">
-            <span className="shrink-0 tabular-nums text-ink">{i + 1}.</span>
-            <span className="truncate" title={asset.originalName}>
+          <li key={asset.id} className="flex items-center gap-1.5 py-0.5 truncate">
+            <span className="shrink-0 font-mono text-[10px] font-bold text-brand">{i + 1}.</span>
+            <span className="truncate text-ink/90" title={asset.originalName}>
               {asset.originalName}
             </span>
           </li>
         ))}
       </ol>
-      <button onClick={onAdd} className="mt-2 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-medium text-ink hover:bg-brand/90">
-        Add all {assets.length} to timeline, in this order
+      <button
+        onClick={onAdd}
+        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-brand px-2.5 py-1.5 text-xs font-semibold text-ink shadow hover:bg-brand/90 active:scale-[0.99] transition-all"
+      >
+        <span>⚡</span> Add All {assets.length} In Numbered Order
       </button>
     </div>
   );

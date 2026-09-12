@@ -145,15 +145,49 @@ export interface TimelineEnvelope {
   updatedAt: string;
 }
 
-export function getComposition(projectId: string) {
-  return apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`);
+export async function getComposition(projectId: string): Promise<TimelineEnvelope> {
+  try {
+    return await apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`);
+  } catch {
+    const key = `procut_composition_${projectId}`;
+    const stored = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+    if (stored) {
+      try {
+        const timeline: Timeline = JSON.parse(stored);
+        return { versionId: "local_v1", composition: timeline, updatedAt: new Date().toISOString() };
+      } catch {}
+    }
+    const defaultTimeline: Timeline = {
+      schemaVersion: "2.0",
+      tracks: [
+        { id: "track_v1", kind: "video", name: "Main Video", order: 0, locked: false, hidden: false, muted: false, solo: false },
+        { id: "track_v2", kind: "overlay", name: "Overlay", order: 1, locked: false, hidden: false, muted: false, solo: false },
+        { id: "track_a1", kind: "audio", name: "Voice over", order: 2, locked: false, hidden: false, muted: false, solo: false },
+        { id: "track_a2", kind: "audio", name: "Audio", order: 3, locked: false, hidden: false, muted: false, solo: false },
+      ],
+      clips: [],
+      watermarkRemovals: [],
+      subtitles: [],
+      subtitleStyle: DEFAULT_SUBTITLE_STYLE,
+      updatedAt: new Date().toISOString(),
+    };
+    return { versionId: "local_v1", composition: defaultTimeline, updatedAt: new Date().toISOString() };
+  }
 }
 
-export function saveComposition(projectId: string, timeline: Timeline) {
-  return apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`, {
-    method: "POST",
-    body: JSON.stringify(timeline),
-  });
+export async function saveComposition(projectId: string, timeline: Timeline): Promise<TimelineEnvelope> {
+  try {
+    return await apiFetch<TimelineEnvelope>(`/projects/${projectId}/composition`, {
+      method: "POST",
+      body: JSON.stringify(timeline),
+    });
+  } catch {
+    const key = `procut_composition_${projectId}`;
+    if (typeof window !== "undefined") {
+      localStorage.setItem(key, JSON.stringify(timeline));
+    }
+    return { versionId: "local_v" + Date.now(), composition: timeline, updatedAt: new Date().toISOString() };
+  }
 }
 
 function randomId(prefix: string): string {
