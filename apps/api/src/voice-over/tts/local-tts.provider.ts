@@ -27,7 +27,16 @@ import type { SynthesisRequest, SynthesisResult, TtsProvider, TtsReadiness, TtsV
 // is NOT available here - that needs a provider like ElevenLabs.
 const LOCAL_VOICES: (TtsVoice & { model: string })[] = [
   { id: "local-eng", label: "English (built-in)", language: "en", gender: "neutral", model: "Xenova/mms-tts-eng" },
-  { id: "local-hin", label: "Hindi / हिन्दी (built-in)", language: "hi", gender: "neutral", model: "Xenova/mms-tts-hin" },
+  // Hindi deliberately absent. Every facebook/mms-tts-* checkpoint is
+  // CC-BY-NC-4.0, which this product cannot ship, and Hindi is the
+  // language this editor is actually used on - so it is served by the
+  // Indic TTS sidecar (CC-BY-4.0 / MIT) instead. See IndicTtsProvider.
+  //
+  // The five voices that remain carry the SAME noncommercial licence.
+  // They are still here only because removing them would leave the
+  // built-in engine with nothing at all, and there is no replacement for
+  // them yet. Adding a language back to this list means checking its
+  // licence first; adding another MMS one repeats the problem.
   { id: "local-spa", label: "Spanish (built-in)", language: "es", gender: "neutral", model: "Xenova/mms-tts-spa" },
   { id: "local-fra", label: "French (built-in)", language: "fr", gender: "neutral", model: "Xenova/mms-tts-fra" },
   { id: "local-deu", label: "German (built-in)", language: "de", gender: "neutral", model: "Xenova/mms-tts-deu" },

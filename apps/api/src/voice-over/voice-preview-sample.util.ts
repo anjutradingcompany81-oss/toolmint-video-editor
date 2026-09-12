@@ -1,9 +1,11 @@
 // A short, fixed phrase to speak when a user wants to hear what a voice
 // sounds like before writing any real content — auditioning a voice
 // shouldn't require typing a whole script first. One phrase per language
-// this project's providers actually offer (see local-tts.provider.ts),
-// so a Hindi voice is heard saying something in Hindi, not English text
-// mispronounced.
+// this project's providers actually offer — the built-in MMS voices in
+// local-tts.provider.ts, plus Hindi from the Indic sidecar — so a Hindi
+// voice is heard saying something in Hindi, not English text
+// mispronounced. Keyed by language rather than by voice, so it keeps
+// working when a language moves between providers.
 const SAMPLE_TEXT_BY_LANGUAGE: Record<string, string> = {
   en: "This is a sample of this voice.",
   hi: "यह इस आवाज़ का एक नमूना है।",
