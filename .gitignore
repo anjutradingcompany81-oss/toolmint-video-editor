@@ -42,3 +42,7 @@ apps/api/prisma/dev.db
 
 # local object storage / docker volumes
 .docker-data/
+
+# test output, not source
+f5-test-output.wav
+__pycache__/

@@ -43,6 +43,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ROOT = Path(__file__).parent
 VOICES_DIR = Path(os.environ.get("INDIC_TTS_VOICES_DIR", ROOT / "voices"))
 MODEL_ID = os.environ.get("INDIC_TTS_MODEL", "SPRINGLab/F5-Hindi-24KHz")
+# Which F5 architecture the checkpoint was trained against. F5-Hindi-24KHz
+# is dim 768 / depth 18, which is F5TTS_Small, not the Base everything
+# else defaults to - loading it as Base fails on a shape mismatch. Set
+# INDIC_TTS_ARCH when pointing at a checkpoint built on a different one
+# (IndicF5 is Base). Getting this wrong fails loudly rather than sounding
+# subtly bad, which is the right failure mode.
+ARCH = os.environ.get("INDIC_TTS_ARCH", "F5TTS_Small")
 # Hindi-only models cannot honestly claim "multi"; the API groups the
 # picker on this and warns when a line is in a script the voice can't read.
 MODEL_LANGUAGE = os.environ.get("INDIC_TTS_LANGUAGE", "hi")
@@ -83,9 +90,32 @@ def _load_model():
         raise RuntimeError(_load_error)
     try:
         from f5_tts.api import F5TTS
+        from huggingface_hub import hf_hub_download, list_repo_files
 
-        LOG.info("loading %s", MODEL_ID)
-        _model = F5TTS(model=MODEL_ID)
+        # F5TTS's `model` argument names an architecture config shipped
+        # inside the package (F5TTS_Base and friends) - NOT a repo id.
+        # A community checkpoint is loaded by handing it the weights and
+        # vocab explicitly, so both are fetched here first.
+        files = list_repo_files(MODEL_ID)
+
+        ckpt_name = next(
+            (f for f in files if f.endswith(".safetensors")),
+            next((f for f in files if f.endswith(".pt")), None),
+        )
+        if ckpt_name is None:
+            raise RuntimeError(f"{MODEL_ID} has no .safetensors or .pt checkpoint")
+
+        # IndicF5 keeps its vocab under checkpoints/, F5-Hindi at the root.
+        vocab_name = next((f for f in files if f.endswith("vocab.txt")), None)
+        if vocab_name is None:
+            raise RuntimeError(f"{MODEL_ID} has no vocab.txt")
+
+        LOG.info("fetching %s from %s", ckpt_name, MODEL_ID)
+        ckpt = hf_hub_download(MODEL_ID, ckpt_name)
+        vocab = hf_hub_download(MODEL_ID, vocab_name)
+
+        LOG.info("loading %s as %s", MODEL_ID, ARCH)
+        _model = F5TTS(model=ARCH, ckpt_file=ckpt, vocab_file=vocab)
         LOG.info("model ready")
         return _model
     except Exception as exc:  # noqa: BLE001 - surfaced verbatim to the operator
