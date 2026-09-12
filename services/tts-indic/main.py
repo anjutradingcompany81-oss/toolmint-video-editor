@@ -86,8 +86,14 @@ def _load_model():
     global _model, _load_error
     if _model is not None:
         return _model
+    # A previous failure is reported but not treated as final. The first
+    # cause of one here was a broken torchaudio build, which no retry
+    # would fix - but a dropped connection mid-download is just as likely
+    # and does fix itself, and caching that permanently would take the
+    # feature down until someone restarted the container.
     if _load_error is not None:
-        raise RuntimeError(_load_error)
+        LOG.warning("retrying model load after earlier failure: %s", _load_error)
+        _load_error = None
     try:
         from f5_tts.api import F5TTS
         from huggingface_hub import hf_hub_download, list_repo_files

@@ -10,7 +10,16 @@ WORKDIR /app
 
 # CPU-only torch first: the default wheel carries ~2.5GB of CUDA that a
 # VPS without a GPU cannot use, and it dominates the image size.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+#
+# torchaudio MUST be installed in the same command, from the same index.
+# Installing torch alone left f5-tts to pull torchaudio from PyPI, which
+# resolved to a build compiled against a different torch (2.11 against
+# torch 2.14) - the versions look fine in `pip list` and the import fails
+# at runtime with "Could not load this library: _torchaudio.abi3.so".
+# Pinning them as a matched pair here means f5-tts finds the requirement
+# already satisfied and leaves them alone.
+RUN pip install --no-cache-dir torch torchaudio \
+      --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
