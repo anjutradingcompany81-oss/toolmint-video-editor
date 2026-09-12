@@ -1,0 +1,10 @@
+# Pinned loosely: F5-TTS moves fast and the sidecar only uses its stable
+# api.F5TTS surface.
+f5-tts>=1.0.0
+fastapi>=0.115
+uvicorn[standard]>=0.32
+soundfile>=0.12
+numpy>=1.26
+# torch is installed separately in the Dockerfile so the CPU-only wheel
+# can be selected - the default wheel pulls ~2.5GB of CUDA that a VPS
+# cannot use.

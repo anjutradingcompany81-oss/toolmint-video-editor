@@ -10,6 +10,7 @@ import { VoiceOverProcessor } from "./voice-over.processor";
 import { TtsRegistryService } from "./tts/tts-registry.service";
 import { LocalTtsProvider } from "./tts/local-tts.provider";
 import { ElevenLabsTtsProvider } from "./tts/elevenlabs-tts.provider";
+import { IndicTtsProvider } from "./tts/indic-tts.provider";
 import { AnthropicScriptProvider } from "./script-gen/anthropic-script.provider";
 import { VOICE_OVER_QUEUE, VOICE_OVER_QUEUE_NAME, VOICE_OVER_REDIS_CONNECTION } from "./voice-over.constants";
 
@@ -22,6 +23,7 @@ import { VOICE_OVER_QUEUE, VOICE_OVER_QUEUE_NAME, VOICE_OVER_REDIS_CONNECTION } 
     TtsRegistryService,
     LocalTtsProvider,
     ElevenLabsTtsProvider,
+    IndicTtsProvider,
     AnthropicScriptProvider,
     // Provided directly rather than by importing MediaModule: MediaModule
     // doesn't export it, and importing the whole module here just to

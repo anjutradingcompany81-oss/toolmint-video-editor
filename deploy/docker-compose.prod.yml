@@ -115,6 +115,11 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      # Started, not healthy: the sidecar answers /health immediately but
+      # pulls model weights lazily on first use, so waiting for readiness
+      # would block the whole API behind a 1.5GB download.
+      tts-indic:
+        condition: service_started
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
@@ -149,10 +154,44 @@ services:
       # other voice-over feature works fine without it. Add
       # ANTHROPIC_API_KEY to deploy/.env.prod to turn it on.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Hindi voices from the Indic TTS sidecar below. Optional: left
+      # unset, that provider reports itself as needing configuration and
+      # the built-in voices are unaffected. Unlike the built-in MMS
+      # models (CC-BY-NC), the sidecar's models are licensed for
+      # commercial use.
+      INDIC_TTS_URL: ${INDIC_TTS_URL:-http://tts-indic:8000}
     volumes:
       - toolmint_model_cache:/app/.cache
     ports:
       - "127.0.0.1:4100:4000"
+
+  # Hindi text-to-speech for AI Voice Over. Separate from the api because
+  # F5 is a PyTorch model the Node process cannot load, and because its
+  # weights are large enough that restarting the API to update a voice
+  # would be painful. Not reachable from outside the compose network.
+  tts-indic:
+    build:
+      context: ../services/tts-indic
+      dockerfile: Dockerfile
+    container_name: toolmint-tts-indic
+    restart: unless-stopped
+    networks: [toolmint_net]
+    environment:
+      # CC-BY-4.0, Hindi, 24kHz native - matches VOICE_OVER_SAMPLE_RATE so
+      # nothing is resampled. Swap for ai4bharat/IndicF5 (MIT, 11 Indian
+      # languages) once its gated download has been accepted on the
+      # HUGGINGFACE_TOKEN account.
+      INDIC_TTS_MODEL: ${INDIC_TTS_MODEL:-SPRINGLab/F5-Hindi-24KHz}
+      INDIC_TTS_LANGUAGE: ${INDIC_TTS_LANGUAGE:-hi}
+      HF_HOME: /app/.cache/huggingface
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN}
+    volumes:
+      # Same persistent cache as the api, so the ~1.5GB of weights is
+      # pulled once and survives deploys.
+      - toolmint_model_cache:/app/.cache
+      # Voices are reference recordings, so they are operator data rather
+      # than build artefacts - mounted, not baked in.
+      - ../services/tts-indic/voices:/app/voices:ro
 
   web:
     build:

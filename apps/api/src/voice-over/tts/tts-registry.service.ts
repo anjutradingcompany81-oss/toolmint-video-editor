@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ElevenLabsTtsProvider } from "./elevenlabs-tts.provider";
+import { IndicTtsProvider } from "./indic-tts.provider";
 import { LocalTtsProvider } from "./local-tts.provider";
 import type { TtsProvider, TtsProviderStatus } from "./tts-provider";
 
@@ -14,10 +15,12 @@ import type { TtsProvider, TtsProviderStatus } from "./tts-provider";
 export class TtsRegistryService {
   private readonly providers: TtsProvider[];
 
-  constructor(local: LocalTtsProvider, elevenLabs: ElevenLabsTtsProvider) {
+  constructor(local: LocalTtsProvider, indic: IndicTtsProvider, elevenLabs: ElevenLabsTtsProvider) {
     // Local first: it is the one that always works, so it is the sane
-    // default selection in the picker.
-    this.providers = [local, elevenLabs];
+    // default selection in the picker. Indic next - when its sidecar is
+    // running it is the better Hindi voice, and unlike the built-in MMS
+    // models it is licensed for commercial use.
+    this.providers = [local, indic, elevenLabs];
   }
 
   get(providerId: string): TtsProvider | null {
