@@ -278,7 +278,6 @@ export function buildMultitrackMergeArgs(plan: MultitrackMergePlan): string[] {
   const visualTransitions = planTransitions(plan.visualClips);
 
   orderedVisual.forEach(({ clip, inputIndex }, i) => {
-    const durationS = sec(clip.durationMs);
     const startS = sec(clip.startMs);
     const label = `v${i}`;
     // "video" kind clips fit the whole canvas by default (scale=1 fills

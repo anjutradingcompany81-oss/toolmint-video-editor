@@ -108,6 +108,10 @@ export default function PreviewPanel({
             <span className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-ink-muted">Gap — no clip here</span>
           </div>
         )}
+        {/* Passes the ref object, never its .current — the overlay reads
+            the node inside its own effects, where that is safe. The rule
+            cannot see through the callback. */}
+        {/* eslint-disable-next-line react-hooks/refs */}
         {hasClips && overlay?.(containerRef)}
         {hasClips && mediaError && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4">

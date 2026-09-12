@@ -51,8 +51,14 @@ export default function WatermarkOverlay({
   const dragRef = useRef<DragState | null>(null);
   // The latest regions, for the window-level move handler - it is bound
   // once per gesture and would otherwise close over a stale array.
+  // Written in an effect rather than during render: a render-phase
+  // mutation is not safe when React can render speculatively and throw
+  // the result away, which would leave this pointing at regions the user
+  // never saw.
   const regionsRef = useRef(regions);
-  regionsRef.current = regions;
+  useEffect(() => {
+    regionsRef.current = regions;
+  }, [regions]);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -131,6 +137,11 @@ export default function WatermarkOverlay({
     onSelect(region.id);
   }
 
+  // beginDrag and the key handler below read containerRef and write
+  // dragRef, but only from pointer/keyboard events - never while
+  // rendering. The rule cannot see through the callbacks passed to
+  // onPointerDown, so it reports the whole returned tree.
+  /* eslint-disable react-hooks/refs */
   return (
     <div className="pointer-events-none absolute inset-0">
       {regions.map((region) => {
@@ -191,6 +202,7 @@ export default function WatermarkOverlay({
       })}
     </div>
   );
+  /* eslint-enable react-hooks/refs */
 }
 
 // Keeps a box inside the frame and above a usable minimum size. The

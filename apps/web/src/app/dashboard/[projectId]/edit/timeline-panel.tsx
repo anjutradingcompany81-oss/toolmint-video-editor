@@ -251,12 +251,17 @@ export default function TimelinePanel({
   // explicit way to move this window the later part of the timeline simply
   // can't be reached — the native overflow scrollbar is easy to miss and
   // hard to grab on a short track.
-  const [scroll, setScroll] = useState({ left: 0, max: 0 });
+  // `width` is carried here rather than read off trackRef during render:
+  // a DOM measurement taken mid-render is stale on first paint and never
+  // updates on resize, which made the visible-range readout below wrong
+  // until the next unrelated re-render.
+  const [scroll, setScroll] = useState({ left: 0, max: 0, width: 0 });
 
   useEffect(() => {
     const el = trackRef.current;
     if (!el) return;
-    const sync = () => setScroll({ left: el.scrollLeft, max: Math.max(0, el.scrollWidth - el.clientWidth) });
+    const sync = () =>
+      setScroll({ left: el.scrollLeft, max: Math.max(0, el.scrollWidth - el.clientWidth), width: el.clientWidth });
     sync();
     el.addEventListener("scroll", sync, { passive: true });
     // Zoom changes and panel resizes both change how much there is to pan.
@@ -731,7 +736,7 @@ export default function TimelinePanel({
           />
           <span className="shrink-0 font-mono text-[10px] tabular-nums text-ink-muted">
             {formatTimecode((scroll.left / pixelsPerSecond) * 1000)} –{" "}
-            {formatTimecode(((scroll.left + (trackRef.current?.clientWidth ?? 0)) / pixelsPerSecond) * 1000)}
+            {formatTimecode(((scroll.left + scroll.width) / pixelsPerSecond) * 1000)}
           </span>
         </div>
       )}

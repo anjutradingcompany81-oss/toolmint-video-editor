@@ -14,11 +14,27 @@ interface RateLimitOptions {
 // running more than one API replica, so limits are shared across instances.
 export const RateLimit = (limit: number, windowMs: number) => SetMetadata(RATE_LIMIT_KEY, { limit, windowMs });
 
+// Sweep expired entries once the map passes this size. An entry is only
+// ever replaced when the SAME ip+route comes back after its window, so
+// without this a caller that hits an endpoint once and never returns
+// leaves its entry behind for the life of the process — and on a public
+// API that is every scanner on the internet, one key at a time.
+const SWEEP_THRESHOLD = 10_000;
+
 @Injectable()
 export class RateLimitGuard implements CanActivate {
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
 
   constructor(private readonly reflector: Reflector) {}
+
+  // Called on the way past the threshold rather than on a timer: no
+  // lifecycle to manage, nothing to unref on shutdown, and the cost lands
+  // on a request that was already going to touch the map.
+  private sweep(now: number): void {
+    for (const [key, entry] of this.hits) {
+      if (entry.resetAt <= now) this.hits.delete(key);
+    }
+  }
 
   canActivate(context: ExecutionContext): boolean {
     const options = this.reflector.get<RateLimitOptions | undefined>(RATE_LIMIT_KEY, context.getHandler());
@@ -30,6 +46,7 @@ export class RateLimitGuard implements CanActivate {
     const entry = this.hits.get(key);
 
     if (!entry || entry.resetAt <= now) {
+      if (this.hits.size >= SWEEP_THRESHOLD) this.sweep(now);
       this.hits.set(key, { count: 1, resetAt: now + options.windowMs });
       return true;
     }

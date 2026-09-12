@@ -116,8 +116,14 @@ export default function VoiceCorrectionPanel({
   const clipById = useMemo(() => new Map(clips.map((c) => [c.id, c])), [clips]);
   const resultsById = useMemo(() => new Map(results.map((r) => [r.id, r])), [results]);
 
+  // Deliberate: localStorage does not exist while this renders on the
+  // server, so the saved preference cannot be a useState initialiser
+  // without the first client render disagreeing with the server's HTML
+  // and tripping a hydration mismatch. Reading it after mount costs one
+  // extra render, once, which is the cheaper of the two problems.
   useEffect(() => {
     const saved = typeof window !== "undefined" ? (window.localStorage.getItem(DISPLAY_LANG_STORAGE_KEY) as DisplayLang | null) : null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR-safe read of a browser-only value
     if (saved === "en" || saved === "hi") setDisplayLang(saved);
   }, []);
 

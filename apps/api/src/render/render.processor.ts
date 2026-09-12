@@ -257,7 +257,11 @@ export class RenderProcessor implements OnModuleDestroy {
       await this.prisma.exportJob.update({ where: { id: exportJob.id }, data: { status: ExportStatus.FAILED, errorMessage: message } });
       throw err;
     } finally {
-      await rm(workDir, { recursive: true, force: true });
+      // Swallowed: this runs in a finally, so a failure to remove the
+      // scratch directory would replace whatever real error sent us
+      // here with a confusing EBUSY. A leftover temp dir is the
+      // lesser problem, and matches the other processors.
+      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
