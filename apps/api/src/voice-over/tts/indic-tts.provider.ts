@@ -56,14 +56,18 @@ export class IndicTtsProvider implements TtsProvider {
     }
   }
 
-  async synthesize({ text, voiceId }: SynthesisRequest): Promise<SynthesisResult> {
+  async synthesize({ text, voiceId, fast }: SynthesisRequest): Promise<SynthesisResult> {
     const base = this.baseUrl();
     if (!base) throw new Error("Indic TTS is not configured on this server (INDIC_TTS_URL is not set)");
 
     const res = await fetch(`${base}/synthesise`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice: voiceId }),
+      // Flow matching's step count is a direct speed/quality dial. 16
+      // steps (half the sidecar's 32-step default) roughly halves preview
+      // wait time; a short one-off audition doesn't need the last bit of
+      // cleanliness a full 32 steps buys for audio that's actually kept.
+      body: JSON.stringify(fast ? { text, voice: voiceId, steps: 16 } : { text, voice: voiceId }),
       // Flow matching on CPU is slow and a long line legitimately takes
       // minutes. Cutting it off early would look like a model failure.
       signal: AbortSignal.timeout(10 * 60_000),

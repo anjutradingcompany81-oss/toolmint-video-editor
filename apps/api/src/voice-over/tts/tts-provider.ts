@@ -46,6 +46,13 @@ export interface TtsProviderStatus {
 export interface SynthesisRequest {
   text: string;
   voiceId: string;
+  // Set for the "audition a voice" preview only. A provider whose
+  // synthesis has a real quality/speed dial (the Indic sidecar's
+  // flow-matching step count) may cut it for a quicker preview - the
+  // sample is discarded after playback, so it doesn't need the same
+  // fidelity as audio that ends up in the export. Providers without such
+  // a dial (ElevenLabs, the built-in MMS voices) just ignore this.
+  fast?: boolean;
 }
 
 export interface SynthesisResult {

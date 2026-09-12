@@ -64,7 +64,7 @@ export class VoiceOverService {
     if (voices.length > 0 && !voice) throw new BadRequestException(`"${dto.voiceId}" is not a voice offered by ${provider.label}`);
 
     const sampleText = samplePhraseForLanguage(voice?.language ?? "en");
-    const result = await provider.synthesize({ text: sampleText, voiceId: dto.voiceId });
+    const result = await provider.synthesize({ text: sampleText, voiceId: dto.voiceId, fast: true });
     return encodeWav(result.samples, result.sampleRate);
   }
 
