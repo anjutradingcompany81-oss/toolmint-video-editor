@@ -421,8 +421,9 @@ export default function VoiceOverPanel({
               <p className="mb-1 font-medium text-ink">Using a voice from your own video</p>
               {provider?.supportsVoiceCloning ? (
                 <p>
-                  {provider.label} supports voice cloning. Clone the speaker in the ElevenLabs dashboard, and the cloned voice appears in the
-                  list below.
+                  {provider.id === "elevenlabs"
+                    ? "ElevenLabs supports voice cloning. Clone the speaker in the ElevenLabs dashboard, and the cloned voice appears in the list below."
+                    : `${provider.label} supports voice cloning — how to add one on this server is explained in its description above.`}
                 </p>
               ) : (
                 <p>
