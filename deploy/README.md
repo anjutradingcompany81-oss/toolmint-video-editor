@@ -32,6 +32,26 @@ Confirm Docker is installed (`docker --version`, `docker compose version`
 — if either command is missing, install Docker Engine + the Compose plugin
 first; this repo doesn't script that part since it varies by distro).
 
+## Updating an existing deployment
+
+Once the stack is up, later releases are one command from the repo root:
+
+```bash
+./deploy/update.sh
+```
+
+It pulls, rebuilds, restarts, and then checks the result — the API
+responds, and the Indic TTS sidecar is up with at least one usable voice.
+That last check matters: the built-in MMS Hindi voice was removed on
+licensing grounds, so if the sidecar has no voices there is no Hindi voice
+at all. The script exits non-zero rather than reporting success.
+
+It also reports whether `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` are
+set, since both are optional and their absence is easy to forget.
+
+The first run after adding the sidecar takes 15–20 minutes: it pulls torch
+and about 1.5GB of model weights. Later runs are quick.
+
 ## 1. Get the code onto the VPS
 
 ```bash
